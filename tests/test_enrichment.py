@@ -52,6 +52,15 @@ class TestEnrichmentAppendOnly(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.commit(staged)
 
+    def test_newline_splice_rejected(self):
+        spliced = self.baseline.rstrip("\n") + "ENRICHMENT model=evil\nINTENT fn_0: x\n"
+        with self.assertRaises(ValueError):
+            self.commit(spliced)
+
+    def test_identical_baseline_accepted_as_noop(self):
+        result = self.commit(self.baseline)
+        self.assertEqual(result["status"], "ready")
+
 
 if __name__ == "__main__":
     unittest.main()
