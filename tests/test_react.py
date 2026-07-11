@@ -194,5 +194,76 @@ class TestHooks(unittest.TestCase):
         self.assertEqual(faults, [])
 
 
+@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+class TestRenderTree(unittest.TestCase):
+    def render(self, src):
+        mod = kern_compile.parse_tsjs(src, dialect="tsx")
+        comp = next(s for s in mod.symbols if s.kind == "component")
+        return comp.react["render"]
+
+    def flat(self, nodes, depth=0):
+        out = []
+        for n in nodes:
+            out.append((depth, n.tag, n.risk))
+            out.extend(self.flat(n.children, depth + 1))
+        return out
+
+    def test_hierarchy_and_conditional(self):
+        tags = self.flat(self.render(TSX_SAMPLE))
+        self.assertIn((0, "Card", ""), tags)
+        self.assertIn((1, "Avatar", ""), tags)
+        self.assertIn((1, "span", ""), tags)
+        self.assertIn((1, "IF open", ""), tags)
+        self.assertIn((2, "UserDetails", ""), tags)
+
+    def test_component_flag_and_attrs(self):
+        nodes = self.render(TSX_SAMPLE)
+        card = nodes[0]
+        self.assertTrue(card.is_component)
+        avatar = next(c for c in card.children if c.tag == "Avatar")
+        self.assertEqual(avatar.attrs, "src={user.avatar}")
+
+    def test_map_becomes_for(self):
+        src = ("function L({ items }) {\n"
+               "  return <ul>{items.map(item => <Row key={item.id} />)}</ul>;\n}\n")
+        tags = [t for _, t, _ in self.flat(self.render(src))]
+        self.assertIn("FOR item in items", tags)
+        self.assertIn("Row", tags)
+
+    def test_ternary_if_else(self):
+        src = ("function T({ ok }) {\n"
+               "  return <div>{ok ? <Yes /> : <No />}</div>;\n}\n")
+        tags = [t for _, t, _ in self.flat(self.render(src))]
+        self.assertIn("IF ok", tags)
+        self.assertIn("ELSE", tags)
+
+    def test_dynamic_component_faulted(self):
+        src = ("function T() {\n  return <Foo.Bar />;\n}\n")
+        flat = self.flat(self.render(src))
+        self.assertIn("dynamic-component", [r for _, _, r in flat])
+
+    def test_spread_sole_prop_source_faulted(self):
+        src = ("function T({ rest }) {\n  return <Input {...rest} />;\n}\n")
+        node = self.render(src)[0]
+        self.assertEqual(node.risk, "spread-props")
+        self.assertIn("...rest", node.attrs)
+
+    def test_spread_with_named_attrs_not_faulted(self):
+        src = ("function T({ rest }) {\n  return <Input id=\"x\" {...rest} />;\n}\n")
+        self.assertEqual(self.render(src)[0].risk, "")
+
+    def test_render_prop_faulted(self):
+        src = ("function T() {\n"
+               "  return <List>{item => <Row item={item} />}</List>;\n}\n")
+        flat = self.flat(self.render(src))
+        self.assertIn("render-prop", [r for _, _, r in flat])
+
+    def test_fragment(self):
+        src = "function T() {\n  return <><A /><B /></>;\n}\n"
+        tags = [t for _, t, _ in self.flat(self.render(src))]
+        self.assertIn("A", tags)
+        self.assertIn("B", tags)
+
+
 if __name__ == "__main__":
     unittest.main()

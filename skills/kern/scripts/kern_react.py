@@ -192,6 +192,179 @@ def _fault_conditional_hooks(node, faults, ntext):
         stack.extend(n.named_children)
 
 
+RENDER_BUDGET = 200
+
+
+def _jsx_name(el, ntext):
+    """(name_text, is_component, risk) for a jsx element node."""
+    opening = el
+    if el.type == "jsx_element":
+        opening = el.named_children[0] if el.named_children else el
+    name = opening.child_by_field_name("name")
+    if name is None:
+        return ("<>", False, "")
+    txt = ntext(name, 60)
+    if name.type in ("member_expression", "jsx_namespace_name"):
+        return (txt, True, "dynamic-component")
+    if COMPONENT_NAME_RE.match(txt):
+        return (txt, True, "")
+    return (txt, False, "")
+
+
+def _jsx_attrs(el, ntext):
+    """(attrs_text, spread_only, event_attrs) from an element's opening tag.
+    event_attrs: list of (attr_name, expr_node, element_name_text)."""
+    opening = el
+    if el.type == "jsx_element":
+        opening = el.named_children[0] if el.named_children else el
+    parts, named, spread, events = [], 0, 0, []
+    for a in opening.named_children:
+        if a.type == "jsx_attribute":
+            aname_node = a.named_children[0] if a.named_children else None
+            aname = ntext(aname_node, 40) if aname_node is not None else ""
+            value = a.named_children[1] if len(a.named_children) > 1 else None
+            if re.match(r"^on[A-Z]", aname) and value is not None:
+                events.append((aname, value))
+                continue
+            named += 1
+            parts.append(ntext(a, 60))
+        elif a.type == "jsx_expression":  # {...spread}
+            spread += 1
+            parts.append(ntext(a, 40).strip("{}"))
+    return " ".join(parts), (spread > 0 and named == 0), events
+
+
+def _lower_jsx(node, ntext, counter, events_out, element_name=""):
+    """Lower one JSX node (or jsx child) to list[RenderNode]."""
+    if counter["n"] >= RENDER_BUDGET:
+        return []
+    n = _unwrap_parens(node)
+    if n is None:
+        return []
+    out = []
+
+    def make(tag, **kw):
+        counter["n"] += 1
+        return RenderNode(tag=tag, line=n.start_point[0] + 1, **kw)
+
+    if n.type in ("jsx_element", "jsx_self_closing_element"):
+        name, is_comp, risk = _jsx_name(n, ntext)
+        attrs, spread_only, ev = _jsx_attrs(n, ntext)
+        if spread_only and not risk:
+            risk = "spread-props"
+        rn = make(name, attrs=attrs, is_component=is_comp, risk=risk)
+        for aname, value in ev:
+            events_out.append((name, aname, value))
+        if n.type == "jsx_element":
+            for ch in n.named_children[1:-1]:
+                rn.children.extend(_lower_jsx(ch, ntext, counter, events_out, name))
+        out.append(rn)
+    elif n.type == "jsx_fragment":
+        for ch in n.named_children:
+            out.extend(_lower_jsx(ch, ntext, counter, events_out, element_name))
+    elif n.type == "jsx_text":
+        txt = ntext(n, 60)
+        if txt:
+            out.append(make(txt))
+    elif n.type == "jsx_expression":
+        inner = n.named_children[0] if n.named_children else None
+        out.extend(_lower_expr(inner, ntext, counter, events_out, element_name))
+    elif n.type in ("binary_expression", "ternary_expression", "call_expression",
+                    "arrow_function", "function_expression"):
+        out.extend(_lower_expr(n, ntext, counter, events_out, element_name))
+    return out
+
+
+def _lower_expr(n, ntext, counter, events_out, element_name):
+    n = _unwrap_parens(n)
+    if n is None or counter["n"] >= RENDER_BUDGET:
+        return []
+
+    def make(tag, **kw):
+        counter["n"] += 1
+        return RenderNode(tag=tag, line=n.start_point[0] + 1, **kw)
+
+    if n.type in JSX_TYPES:
+        return _lower_jsx(n, ntext, counter, events_out, element_name)
+    if n.type == "binary_expression":
+        op = n.child_by_field_name("operator")
+        right = _unwrap_parens(n.child_by_field_name("right"))
+        if op is not None and op.type == "&&" and right is not None and right.type in JSX_TYPES:
+            left = n.child_by_field_name("left")
+            rn = make(f"IF {ntext(left, 80)}", is_structure=True)
+            rn.children = _lower_jsx(right, ntext, counter, events_out, element_name)
+            return [rn]
+    elif n.type == "ternary_expression":
+        cond = n.child_by_field_name("condition")
+        cons = _unwrap_parens(n.child_by_field_name("consequence"))
+        alt = _unwrap_parens(n.child_by_field_name("alternative"))
+        branches = []
+        if cons is not None and cons.type in JSX_TYPES:
+            rn = make(f"IF {ntext(cond, 80)}", is_structure=True)
+            rn.children = _lower_jsx(cons, ntext, counter, events_out, element_name)
+            branches.append(rn)
+        if alt is not None and alt.type in JSX_TYPES:
+            el = make("ELSE", is_structure=True)
+            el.children = _lower_jsx(alt, ntext, counter, events_out, element_name)
+            branches.append(el)
+        if branches:
+            return branches
+    elif n.type == "call_expression":
+        callee = n.child_by_field_name("function")
+        if callee is not None and callee.type == "member_expression":
+            prop = callee.child_by_field_name("property")
+            if prop is not None and ntext(prop, 20) == "map":
+                receiver = callee.child_by_field_name("object")
+                args = n.child_by_field_name("arguments")
+                cb = next((a for a in args.named_children
+                           if a.type in ("arrow_function", "function_expression")), None) if args is not None else None
+                if cb is not None:
+                    params = cb.child_by_field_name("parameters")
+                    single = cb.child_by_field_name("parameter")
+                    if single is not None:
+                        param_txt = ntext(single, 40)
+                    elif params is not None and params.named_children:
+                        param_txt = ntext(params.named_children[0], 40)
+                    else:
+                        param_txt = "_"
+                    rn = make(f"FOR {param_txt} in {ntext(receiver, 60)}", is_structure=True)
+                    body = cb.child_by_field_name("body")
+                    rn.children = _lower_jsx(body, ntext, counter, events_out, element_name) if body is not None else []
+                    return [rn]
+    elif n.type in ("arrow_function", "function_expression"):
+        return [make("{" + ntext(n, 60) + "}", risk="render-prop")]
+    return [make("{" + ntext(n, 80) + "}")]
+
+
+def _extract_render(node, react, ntext, events_out):
+    body = node.child_by_field_name("body")
+    if body is None:
+        return
+    counter = {"n": 0}
+    jsx_root = None
+    if body.type != "statement_block":
+        jsx_root = _unwrap_parens(body)
+    else:
+        stack = list(body.named_children)
+        while stack:
+            s = stack.pop(0)
+            if s.type in FN_TYPES:
+                continue
+            if s.type == "return_statement":
+                for ch in s.named_children:
+                    u = _unwrap_parens(ch)
+                    if u is not None and u.type in JSX_TYPES:
+                        jsx_root = u   # last JSX return wins
+            else:
+                stack.extend(s.named_children)
+    if jsx_root is None:
+        return
+    react["render"] = _lower_jsx(jsx_root, ntext, counter, events_out)
+    if counter["n"] >= RENDER_BUDGET:
+        react["render"].append(RenderNode(tag="…", risk="render-truncated",
+                                          line=jsx_root.start_point[0] + 1))
+
+
 def lower_components(fn_nodes, ntext, flow_fn) -> bool:
     upgraded = False
     for sym, node in fn_nodes:
@@ -212,5 +385,8 @@ def lower_components(fn_nodes, ntext, flow_fn) -> bool:
             _extract_hooks(body, sym.react, ntext, flow_fn)
         else:
             sym.react["setters"] = {}
+        raw_events = []
+        _extract_render(node, sym.react, ntext, raw_events)
+        sym.react["_raw_events"] = raw_events   # consumed by Task 5
         upgraded = True
     return upgraded
