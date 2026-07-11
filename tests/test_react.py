@@ -48,5 +48,58 @@ class TestDialectRouting(unittest.TestCase):
         self.assertEqual(mod.lang, "javascript")
 
 
+@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+class TestComponentDetection(unittest.TestCase):
+    def parse(self, src, dialect="tsx"):
+        return kern_compile.parse_tsjs(src, dialect=dialect)
+
+    def sym(self, mod, name):
+        return next(s for s in mod.symbols if s.name == name)
+
+    def test_capitalized_jsx_function_is_component(self):
+        mod = self.parse(TSX_SAMPLE)
+        s = self.sym(mod, "UserCard")
+        self.assertEqual(s.kind, "component")
+        self.assertEqual(mod.frontend, "tree-sitter+react")
+
+    def test_props_extracted(self):
+        mod = self.parse(TSX_SAMPLE)
+        self.assertEqual(self.sym(mod, "UserCard").react["props"],
+                         ["user", "onClose=noop"])
+
+    def test_capitalized_without_jsx_stays_function(self):
+        mod = self.parse("export function Parse(x) { return x + 1; }\n")
+        self.assertEqual(self.sym(mod, "Parse").kind, "function")
+
+    def test_lowercase_with_jsx_stays_function(self):
+        mod = self.parse("function helper() { return <div />; }\n")
+        self.assertEqual(self.sym(mod, "helper").kind, "function")
+
+    def test_arrow_component_detected(self):
+        mod = self.parse("export const Badge = ({ label }) => <b>{label}</b>;\n")
+        self.assertEqual(self.sym(mod, "Badge").kind, "component")
+
+    def test_memo_wrapper_unwrapped(self):
+        mod = self.parse("import { memo } from 'react';\n"
+                         "const Row = memo(({ id }) => <li>{id}</li>);\n")
+        s = self.sym(mod, "Row")
+        self.assertEqual(s.kind, "component")
+        self.assertEqual(s.react["wrapper"], "memo")
+
+    def test_non_react_file_untouched(self):
+        mod = self.parse("export function parse(raw) { return Number(raw); }\n",
+                         dialect="js")
+        self.assertEqual(mod.frontend, "tree-sitter")
+        self.assertEqual(self.sym(mod, "parse").kind, "function")
+
+    def test_nested_return_jsx_in_inner_fn_not_component(self):
+        src = ("function Outer() {\n"
+               "  const inner = () => <div />;\n"
+               "  return 42;\n"
+               "}\n")
+        mod = self.parse(src)
+        self.assertEqual(self.sym(mod, "Outer").kind, "function")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -140,6 +140,7 @@ class Symbol:
     effects: dict = field(default_factory=dict)      # effect -> list of via names ([] = direct)
     raises_all: dict = field(default_factory=dict)   # exception -> list of via names
     unknown_calls: int = 0
+    react: dict = field(default_factory=dict)        # React adapter payload (kern_react)
 
 
 @dataclass
@@ -601,6 +602,8 @@ def parse_tsjs(text: str, dialect: str = "js") -> ModuleIR:
                 ops.extend(flow(c, depth, budget - len(ops)))
         return ops[:budget]
 
+    fn_nodes: list = []
+
     def function_symbol(node, qualified):
         calls, raises = [], []
         collect_calls(node, calls)
@@ -610,13 +613,15 @@ def parse_tsjs(text: str, dialect: str = "js") -> ModuleIR:
         body = field_node(node, "body")
         a, b = span(node)
         is_async = any(ch.type == "async" for ch in node.children)
-        return Symbol(
+        sym = Symbol(
             kind="function", name=qualified, span=(a, b),
             signature=ntext(params, 200).strip("()") if params is not None else "",
             returns=ntext(rtype, 60).lstrip(": ") if rtype is not None else "",
             slice8=slice_sha8(text, a, b), calls=calls, raises=raises,
             flow=flow(body) if body is not None else [], is_async=is_async,
         )
+        fn_nodes.append((sym, node))
+        return sym
 
     symbols: list[Symbol] = []
 
@@ -632,6 +637,25 @@ def parse_tsjs(text: str, dialect: str = "js") -> ModuleIR:
                         value = field_node(d, "value")
                         if value is not None and value.type in ("arrow_function", "function_expression"):
                             symbols.append(function_symbol(value, ntext(name, 60)))
+                        elif value is not None and value.type == "call_expression":
+                            callee = field_node(value, "function")
+                            wrapper = ntext(callee, 60) if callee is not None else ""
+                            inner = None
+                            if wrapper in ("memo", "forwardRef", "React.memo", "React.forwardRef"):
+                                args = field_node(value, "arguments")
+                                if args is not None:
+                                    inner = next((ch for ch in args.named_children
+                                                  if ch.type in ("arrow_function", "function_expression")), None)
+                            if inner is not None:
+                                sym = function_symbol(inner, ntext(name, 60))
+                                sym.decorators = [wrapper.split(".")[-1]]
+                                symbols.append(sym)
+                            elif name is not None:
+                                rendered = ntext(value, 100)
+                                hint = bool(SECRET_NAME.search(ntext(name, 60)))
+                                if hint:
+                                    rendered = sanitize_string(rendered, secret_hint=True)
+                                symbols.append(Symbol(kind="const", name=ntext(name, 60), detail="=" + rendered, span=span(c)))
                         elif name is not None:
                             if value is not None:
                                 rendered = ntext(value, 100)
@@ -658,6 +682,12 @@ def parse_tsjs(text: str, dialect: str = "js") -> ModuleIR:
                 top(c, class_prefix)
     top(tree.root_node)
 
+    frontend = "tree-sitter"
+    if dialect in ("js", "tsx"):
+        import kern_react
+        if kern_react.lower_components(fn_nodes, ntext=ntext, flow_fn=flow):
+            frontend = "tree-sitter+react"
+
     lines = text.splitlines()
     omit = {
         "docstrings": 0,
@@ -681,7 +711,7 @@ def parse_tsjs(text: str, dialect: str = "js") -> ModuleIR:
             line = 1
         parse_error = f"tree-sitter reported syntax errors (first at L{line})"
 
-    return ModuleIR(lang_name, "tree-sitter", symbols, omit, parse_error=parse_error)
+    return ModuleIR(lang_name, frontend, symbols, omit, parse_error=parse_error)
 
 
 def emit_il(module: ModuleIR, source_rel: str, source_sha256: str,
