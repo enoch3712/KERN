@@ -29,7 +29,6 @@ const environments = [
     id: "cursor",
     name: "Cursor",
     logo: "/logos/cursor.svg",
-    runtimeLogo: "/logos/grok.svg",
     compiler: "Composer 2.5",
     runtime: "Grok 4.5",
     command: "git clone --depth 1 https://github.com/enoch3712/KERN.git ~/.cursor/plugins/local/kern",
@@ -100,16 +99,39 @@ function SectionHead({ eyebrow, title, body }) {
   );
 }
 
-function EnvironmentTabs({ activeId, onChange, label, className = "environment-switch" }) {
+function moveTabFocus(event, ids, activeId, onChange) {
+  const current = ids.indexOf(activeId);
+  let next = current;
+
+  if (["ArrowRight", "ArrowDown"].includes(event.key)) next = (current + 1) % ids.length;
+  else if (["ArrowLeft", "ArrowUp"].includes(event.key)) next = (current - 1 + ids.length) % ids.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = ids.length - 1;
+  else return;
+
+  event.preventDefault();
+  const nextId = ids[next];
+  const tablist = event.currentTarget.closest('[role="tablist"]');
+  onChange(nextId);
+  window.requestAnimationFrame(() => tablist?.querySelector(`[data-tab-id="${nextId}"]`)?.focus());
+}
+
+function EnvironmentTabs({ activeId, onChange, label, panelId, idPrefix, className = "environment-switch" }) {
+  const ids = environments.map((environment) => environment.id);
   return (
     <div className={className} role="tablist" aria-label={label}>
       {environments.map((environment) => (
         <button
           type="button"
           role="tab"
+          id={`${idPrefix}-tab-${environment.id}`}
+          data-tab-id={environment.id}
           aria-selected={activeId === environment.id}
+          aria-controls={panelId}
+          tabIndex={activeId === environment.id ? 0 : -1}
           className={activeId === environment.id ? "active" : ""}
           onClick={() => onChange(environment.id)}
+          onKeyDown={(event) => moveTabFocus(event, ids, activeId, onChange)}
           key={environment.id}
         >
           <span className={environment.light ? "logo-tile light" : "logo-tile"}>
@@ -251,9 +273,14 @@ export default function Home() {
                 <button
                   type="button"
                   role="tab"
+                  id={`install-tab-${environment.id}`}
+                  data-tab-id={environment.id}
                   aria-selected={installEnv === environment.id}
+                  aria-controls="install-panel"
+                  tabIndex={installEnv === environment.id ? 0 : -1}
                   className={installEnv === environment.id ? "active" : ""}
                   onClick={() => setInstallEnv(environment.id)}
+                  onKeyDown={(event) => moveTabFocus(event, environments.map((item) => item.id), installEnv, setInstallEnv)}
                   key={environment.id}
                 >
                   <span className={environment.light ? "logo-tile light" : "logo-tile"}><img src={asset(environment.logo)} alt="" /></span>
@@ -261,7 +288,7 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <div className="command-panel" role="tabpanel">
+            <div className="command-panel" id="install-panel" role="tabpanel" aria-labelledby={`install-tab-${activeInstall.id}`}>
               <div className="command-line"><span>$</span><code>{activeInstall.command}</code></div>
               <button className="copy-button" type="button" onClick={() => copyInstall(activeInstall)} aria-label={`Copy ${activeInstall.name} install command`}>
                 {copied === activeInstall.id ? "Copied" : copied === "error" ? "Select text" : "Copy"}
@@ -278,9 +305,9 @@ export default function Home() {
             body="The host changes. The KERN IL contract does not. Select a provider to see an example compiler/runtime route around the same source transformation."
           />
 
-          <EnvironmentTabs activeId={compilerEnv} onChange={setCompilerEnv} label="Compiler environment" />
+          <EnvironmentTabs activeId={compilerEnv} onChange={setCompilerEnv} label="Compiler environment" panelId="compiler-panel" idPrefix="compiler" />
 
-          <div className={`compiler-workbench provider-${activeCompiler.id}`}>
+          <div className={`compiler-workbench provider-${activeCompiler.id}`} id="compiler-panel" role="tabpanel" aria-labelledby={`compiler-tab-${activeCompiler.id}`}>
             <div className="workbench-bar">
               <Brand />
               <span>src/cache.py</span>
@@ -358,9 +385,14 @@ export default function Home() {
                 <button
                   type="button"
                   role="tab"
+                  id={`memory-tab-${index}`}
+                  data-tab-id={String(index)}
                   aria-selected={memoryStep === index}
+                  aria-controls="memory-panel"
+                  tabIndex={memoryStep === index ? 0 : -1}
                   className={memoryStep === index ? "active" : ""}
                   onClick={() => chooseMemoryStep(index)}
+                  onKeyDown={(event) => moveTabFocus(event, memorySteps.map((_, stepIndex) => String(stepIndex)), String(memoryStep), (nextId) => chooseMemoryStep(Number(nextId)))}
                   key={step.title}
                 >
                   <span>{String(index + 1).padStart(2, "0")}</span>
@@ -369,7 +401,7 @@ export default function Home() {
               ))}
             </div>
 
-            <div className={`memory-stage memory-state-${memoryStep}`} role="tabpanel">
+            <div className={`memory-stage memory-state-${memoryStep}`} id="memory-panel" role="tabpanel" aria-labelledby={`memory-tab-${memoryStep}`}>
               <div className="memory-region source-region">
                 <div className="region-head"><span>SOURCE REPOSITORY</span><small>authoritative</small></div>
                 <div className="file-tree">

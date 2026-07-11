@@ -1,5 +1,26 @@
 {
+  "schema_version": "kern.pilot-result.v1",
   "date": "2026-07-10",
+  "reproducibility": {
+    "source_public": false,
+    "raw_artifacts_public": false,
+    "recorded": [
+      "source byte, character, and line counts",
+      "representation token estimates",
+      "rendering font, column, page, byte, and patch accounting",
+      "retrieval question categories",
+      "complete-run input accounting"
+    ],
+    "not_recorded": [
+      "redistributable source fixture",
+      "exact tokenizer package and version",
+      "renderer package version and page pixel dimensions",
+      "prompt and artifact hashes",
+      "per-question expected and actual answer rows",
+      "repeat seeds and latency"
+    ],
+    "note": "The missing fields prevent byte-for-byte reproduction and independent CLEAR-gate auditing; future benchmark versions should record them."
+  },
   "source": {
     "source_id": "redacted-pilot",
     "bytes": 188606,

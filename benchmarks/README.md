@@ -54,6 +54,11 @@ KERN therefore reports representation estimates separately from complete agent-r
 
 The machine-readable record is [`results/python-pilot-v1.json`](results/python-pilot-v1.json).
 
+The v1 record explicitly lists fields that were not captured, including exact
+tool versions, page dimensions, hashes, per-question expected/actual rows,
+seeds, and latency. Do not treat the `CLEAR` label as independently auditable
+until a future fixture records those fields.
+
 ## Reproduction limits
 
 The original pilot source is intentionally not published, so the exact figures cannot be reproduced byte-for-byte from this repository. This is a privacy constraint, not a reproducibility claim.

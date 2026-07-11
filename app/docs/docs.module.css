@@ -97,6 +97,8 @@
   gap: 28px;
 }
 
+.mobileDocNav { display: none; }
+
 .topbar nav a,
 .githubLink {
   color: var(--muted);
@@ -293,6 +295,18 @@
     rgba(8, 13, 12, 0.88);
   box-shadow: 0 38px 90px rgba(0, 0, 0, 0.22);
 }
+
+.noScriptProviders {
+  padding: 24px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0 0 14px 14px;
+  background: #080d0c;
+}
+
+.noScriptProviders > p { color: var(--muted); }
+.noScriptProviders section { padding: 22px 0; border-top: 1px solid var(--line); }
+.noScriptProviders h2 { margin: 0 0 12px; }
+.noScriptProviders code { color: #d7e9e1; overflow-wrap: anywhere; }
 
 .providerHeading {
   display: flex;
@@ -603,6 +617,68 @@
   line-height: 1.65;
 }
 
+.benchmarkCard {
+  display: grid;
+  overflow: hidden;
+  grid-template-columns: 1fr 28px 1fr 28px 1fr;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: rgba(8, 13, 12, 0.88);
+}
+
+.benchmarkCard > div {
+  display: flex;
+  min-height: 190px;
+  padding: 28px 20px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.benchmarkCard > div span,
+.benchmarkCard > div small,
+.benchmarkCard aside > strong {
+  color: var(--muted-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.benchmarkCard > div strong {
+  margin: 13px 0 5px;
+  color: var(--paper);
+  font-size: clamp(28px, 3vw, 42px);
+  letter-spacing: -0.05em;
+}
+
+.benchmarkCard > div:nth-of-type(3) strong { color: var(--lime); }
+.benchmarkCard > b { color: var(--muted-2); font-size: 20px; text-align: center; }
+
+.benchmarkCard aside {
+  display: grid;
+  padding: 22px 25px;
+  grid-column: 1 / -1;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 20px;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.benchmarkCard aside p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.benchmarkCard aside nav { display: flex; gap: 14px; }
+.benchmarkCard aside a { display: inline-flex; align-items: center; gap: 6px; color: var(--lime); font-size: 10px; font-weight: 750; white-space: nowrap; }
+.benchmarkCard aside a svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+
 .safetyGrid {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
@@ -769,6 +845,28 @@
     display: none;
   }
 
+  .mobileDocNav {
+    position: sticky;
+    top: 62px;
+    z-index: 15;
+    display: flex;
+    min-height: 42px;
+    padding: 0 16px;
+    align-items: center;
+    gap: 18px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--line);
+    background: rgba(5, 7, 7, 0.92);
+    backdrop-filter: blur(16px);
+  }
+
+  .mobileDocNav a {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
   .modelRoute {
     grid-template-columns: 1fr;
   }
@@ -812,6 +910,8 @@
     min-height: 58px;
     padding: 0 16px;
   }
+
+  .mobileDocNav { top: 58px; }
 
   .docsWord,
   .slash {
@@ -952,6 +1052,12 @@
     grid-template-columns: 1fr 1fr;
     justify-content: start;
   }
+
+  .benchmarkCard { grid-template-columns: 1fr; }
+  .benchmarkCard > b { transform: rotate(90deg); }
+  .benchmarkCard > div { min-height: 140px; }
+  .benchmarkCard aside { grid-template-columns: 1fr; }
+  .benchmarkCard aside nav { flex-wrap: wrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {

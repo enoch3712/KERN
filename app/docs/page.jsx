@@ -62,10 +62,10 @@ const providers = [
     summary:
       "Install locally until KERN is listed in Cursor's public marketplace, then reload the Cursor window.",
     compiler: "Fast alias",
-    compilerDetail: "The bundled compiler agent starts with model: fast.",
+    compilerDetail: "The bundled agent starts with model: fast; use inherit or an exact supported slug when you need a verifiable route.",
     runtime: "Current Cursor model",
     runtimeDetail: "Use any runtime model exposed by your workspace and plan.",
-    defaultRouting: "Pin a workspace model in kern-compiler.md when you need predictable compilation cost.",
+    defaultRouting: "Cursor routing varies by version, plan, and policy. Verify the resolved subagent model in the host before relying on cost or fidelity.",
     location: "~/.cursor/plugins/local/kern",
     configure: "$EDITOR ~/.cursor/plugins/local/kern/agents/cursor/kern-compiler.md",
     verify:
@@ -115,6 +115,24 @@ function CopyIcon() {
       <path d="M13 7V5.5A1.5 1.5 0 0 0 11.5 4h-7A1.5 1.5 0 0 0 3 5.5v7A1.5 1.5 0 0 0 4.5 14H7" />
     </svg>
   );
+}
+
+function moveProviderFocus(event, providers, activeId, onChange) {
+  const ids = providers.map((item) => item.id);
+  const current = ids.indexOf(activeId);
+  let next = current;
+
+  if (["ArrowRight", "ArrowDown"].includes(event.key)) next = (current + 1) % ids.length;
+  else if (["ArrowLeft", "ArrowUp"].includes(event.key)) next = (current - 1 + ids.length) % ids.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = ids.length - 1;
+  else return;
+
+  event.preventDefault();
+  const nextId = ids[next];
+  const tablist = event.currentTarget.closest('[role="tablist"]');
+  onChange(nextId);
+  window.requestAnimationFrame(() => tablist?.querySelector(`[data-provider-id="${nextId}"]`)?.focus());
 }
 
 export default function DocsPage() {
@@ -191,7 +209,7 @@ export default function DocsPage() {
         <nav aria-label="Documentation navigation">
           <a href="#install">Install</a>
           <a href="#architecture">Architecture</a>
-          <a href="#safety">Safety</a>
+          <a href="#evidence">Evidence</a>
         </nav>
         <a
           className={styles.githubLink}
@@ -202,6 +220,13 @@ export default function DocsPage() {
           GitHub <Arrow />
         </a>
       </header>
+
+      <nav className={styles.mobileDocNav} aria-label="Mobile documentation navigation">
+        <a href="#install">Install</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#evidence">Evidence</a>
+        <a href="#safety">Safety</a>
+      </nav>
 
       <article className={styles.content}>
         <section className={styles.intro} id="install" aria-labelledby="docs-title">
@@ -228,9 +253,12 @@ export default function DocsPage() {
                 key={item.id}
                 type="button"
                 role="tab"
+                data-provider-id={item.id}
                 aria-selected={item.id === providerId}
                 aria-controls="provider-panel"
+                tabIndex={item.id === providerId ? 0 : -1}
                 onClick={() => selectProvider(item.id)}
+                onKeyDown={(event) => moveProviderFocus(event, providers, providerId, selectProvider)}
               >
                 <span className={`${styles.providerLogo} ${item.lightLogo ? styles.lightLogo : ""}`}>
                   <img src={withBasePath(item.logo)} alt="" />
@@ -322,6 +350,19 @@ export default function DocsPage() {
               </div>
             </dl>
           </div>
+
+          <noscript>
+            <div className={styles.noScriptProviders}>
+              <p>JavaScript is off, so every provider is shown below.</p>
+              {providers.map((item) => (
+                <section key={item.id} id={item.id === "claude" ? "claude-code" : item.id}>
+                  <h2>{item.name}</h2>
+                  <code>{item.install}</code>
+                  <p><strong>Verify:</strong> <code>{item.verify}</code></p>
+                </section>
+              ))}
+            </div>
+          </noscript>
         </section>
 
         <section className={styles.commonSection} id="architecture" aria-labelledby="architecture-title">
@@ -344,6 +385,33 @@ export default function DocsPage() {
               </li>
             ))}
           </ol>
+        </section>
+
+        <section className={styles.commonSection} id="evidence" aria-labelledby="evidence-title">
+          <div className={styles.sectionHeading}>
+            <p className={styles.eyebrow}>MEASURED PILOT / HONEST LIMITS</p>
+            <h2 id="evidence-title">Smaller representation, measured separately from the loop.</h2>
+            <p>
+              One 3,704-line Python pilot produced a 12.75× smaller selected
+              representation. That number does not include system instructions,
+              tools, reasoning, or repeated turns.
+            </p>
+          </div>
+          <div className={styles.benchmarkCard}>
+            <div><span>Raw source</span><strong>36,674</strong><small>text tokens est.</small></div>
+            <b aria-hidden="true">→</b>
+            <div><span>KERN IL</span><strong>5,795</strong><small>text tokens est.</small></div>
+            <b aria-hidden="true">→</b>
+            <div><span>Dense pages</span><strong>2,877</strong><small>image tokens est.</small></div>
+            <aside>
+              <strong>End-to-end receipt</strong>
+              <p>18,107 uncached input tokens across four turns; 73,403 cumulative. Ultra drifted, while Safe cost more than IL text.</p>
+              <nav aria-label="Benchmark resources">
+                <a href="https://github.com/enoch3712/KERN/tree/main/benchmarks" target="_blank" rel="noreferrer">Methodology <Arrow /></a>
+                <a href="https://github.com/enoch3712/KERN/blob/main/benchmarks/results/python-pilot-v1.json" target="_blank" rel="noreferrer">Raw record <Arrow /></a>
+              </nav>
+            </aside>
+          </div>
         </section>
 
         <section className={styles.commonSection} id="safety" aria-labelledby="safety-title">

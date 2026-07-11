@@ -15,8 +15,9 @@
     <rect x="34" y="11" width="10" height="42" rx="5" opacity=".82"/>
   </g>
   <text x="170" y="136" fill="#eefbf4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="26" font-weight="800" letter-spacing="4">KERN/IL</text>
-  <text x="95" y="288" fill="url(#accent)" font-family="Inter, Arial, sans-serif" font-size="90" font-weight="750" letter-spacing="-5">12.75× smaller.</text>
-  <text x="95" y="375" fill="#eefbf4" font-family="Inter, Arial, sans-serif" font-size="61" font-weight="650" letter-spacing="-3">Exact source when it matters.</text>
-  <text x="98" y="458" fill="#91a19b" font-family="Inter, Arial, sans-serif" font-size="25">Compile repositories for machine attention.</text>
-  <text x="98" y="529" fill="#82958d" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">36,674 raw → 5,795 KERN IL → 2,877 dense · measured pilot artifact</text>
+  <text x="95" y="270" fill="url(#accent)" font-family="Inter, Arial, sans-serif" font-size="84" font-weight="750" letter-spacing="-5">12.75× smaller</text>
+  <text x="95" y="346" fill="#eefbf4" font-family="Inter, Arial, sans-serif" font-size="61" font-weight="650" letter-spacing="-3">selected representation.</text>
+  <text x="98" y="418" fill="#eefbf4" font-family="Inter, Arial, sans-serif" font-size="36" font-weight="600" letter-spacing="-1.5">Exact source before every write.</text>
+  <text x="98" y="482" fill="#91a19b" font-family="Inter, Arial, sans-serif" font-size="22">Single 3,704-line Python pilot · representation ≠ agent-loop cost</text>
+  <text x="98" y="535" fill="#82958d" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">36,674 raw → 5,795 KERN IL → 2,877 dense</text>
 </svg>
