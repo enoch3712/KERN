@@ -37,6 +37,11 @@ python3 <skill-root>/scripts/kern_cache.py --repo <repo> ensure path/to/file
 
 `ensure` immediately creates a deterministic baseline IL when the cache is absent or stale. It returns cache paths, the current source hash, and whether model enrichment is needed.
 
+`ensure` accepts `--tier L1|L2|L3` (default from config `default_tier`, `L2`).
+L1 = signatures + calls + effects + raises; L2 = + control-flow skeleton;
+L3 = + expressions and dataflow. Files below the `min_ir_tokens` floor get a
+`mode=source-cheaper` stub — read exact source instead.
+
 When enrichment is needed and a fast compiler subagent is available:
 
 1. Prepare a unique job and retain its JSON output:
@@ -71,6 +76,16 @@ If no compiler subagent is configured, use the deterministic baseline and state 
 Prefer the `dense` image profile: 10 px, four columns, lossless WebP. Do not use `ultra` for exact work. If image input is unavailable, use textual IL.
 
 ## Fault exact source before edits
+
+Before editing any symbol read from IL or an image, verify its source-map handle:
+
+    python3 <skill-root>/scripts/kern_cache.py --repo <repo> verify path/to/file \
+      --symbol <qualified-name> --hash <slice-hash> [--span L<a>-L<b>]
+
+`ok` — proceed. `moved` — same bytes at a new span; use the returned span.
+`stale` — the symbol changed; the IL page is invalid, fault exact source.
+Lines tagged `!FAULT(reason)` (regex, math, concurrency, elided-literal) may not
+support a claim or an edit without an exact-source fault, regardless of verify.
 
 ```bash
 python3 <skill-root>/scripts/kern_cache.py --repo <repo> fault path/to/file \

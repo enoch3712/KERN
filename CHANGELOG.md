@@ -2,6 +2,14 @@
 
 All notable changes to KERN are documented here.
 
+## 0.2.0 — 2026-07-11
+
+- Implement codec `kern-il/0.2` with deterministic tiered compiler (L1/L2/L3).
+- Add computed side effects and exception propagation through the IL.
+- Introduce `verify` CLI verb for source-map validation before edits.
+- Implement size floor (`min_ir_tokens=600`) with `mode=source-cheaper` stubs.
+- Add token benchmark harness for compression measurement and modeling.
+
 ## 0.1.1 — 2026-07-11
 
 - Enforce codec-version invalidation and reject stale rendered pages.

@@ -134,7 +134,9 @@ KERN complements parsing, retrieval, tests, and version control. It does not rep
 
 ## Language and runtime coverage
 
-Python receives a deterministic AST-based baseline. JavaScript, TypeScript, Go, Rust, Java, Kotlin, Swift, C, C++, C#, and other recognized source formats receive a deterministic generic baseline before optional compiler-model enrichment. Unsupported text formats fall back to the generic representation and exact-source path.
+Python and (when tree-sitter is installed) JavaScript/TypeScript receive a deterministic
+AST-based compiler with tiered detail, computed side effects, and exception propagation.
+Other recognized source formats receive a deterministic generic baseline.
 
 | Environment | Distribution | Compiler selection |
 |---|---|---|
@@ -157,7 +159,8 @@ See [model routing](skills/kern/references/model-routing.md) for the host-specif
 ```bash
 npm ci
 npm run build
-python3 -m py_compile skills/kern/scripts/kern_cache.py skills/kern/scripts/render_ir.py
+python3 -m py_compile skills/kern/scripts/kern_cache.py skills/kern/scripts/render_ir.py skills/kern/scripts/kern_compile.py
+python3 -m unittest discover -s tests
 python3 skills/kern/scripts/kern_cache.py --repo . scan
 ```
 
