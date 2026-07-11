@@ -10,16 +10,14 @@ import math
 import os
 import sys
 import textwrap
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 try:
     from PIL import Image, ImageDraw, ImageFont, features
-except ImportError as exc:  # pragma: no cover - environment dependent
-    raise SystemExit(
-        "KERN image rendering requires Pillow. Keep using textual IR, or install "
-        "Pillow in an approved environment with: python3 -m pip install Pillow"
-    ) from exc
+except ImportError:  # pragma: no cover - environment dependent
+    Image = ImageDraw = ImageFont = features = None
 
 
 @dataclass(frozen=True)
@@ -53,9 +51,31 @@ FONT_CANDIDATES = (
 
 def atomic_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    created = False
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created = True
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        created = False
+    finally:
+        if created:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def require_pillow() -> None:
+    if Image is None or ImageDraw is None or ImageFont is None or features is None:
+        raise SystemExit(
+            "KERN image rendering requires Pillow. Keep using textual IR, or install "
+            "Pillow in an approved environment with: python3 -m pip install Pillow"
+        )
 
 
 def load_font(size: int):
@@ -115,18 +135,56 @@ def wrap_lines(text: str, font, column_width: int) -> list[str]:
     return result
 
 
-def safe_clear_output(output: Path) -> None:
+def assert_safe_output_path(output: Path, cache_root: Path) -> Path:
+    """Return an absolute output path only when it stays in a symlink-free cache tree."""
+    cache_abs = Path(os.path.abspath(cache_root))
+    output_abs = Path(os.path.abspath(output))
+    if cache_abs.name != ".kern":
+        raise ValueError(f"Render cache root must be a .kern directory: {cache_root}")
+    try:
+        relative = output_abs.relative_to(cache_abs)
+    except ValueError as exc:
+        raise ValueError(f"Render output escapes cache root: {output}") from exc
+
+    current = cache_abs
+    if current.is_symlink():
+        raise ValueError(f"Symlinked render cache path is not allowed: {current}")
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"Symlinked render output path is not allowed: {current}")
+
+    resolved_cache = cache_abs.resolve(strict=False)
+    try:
+        output_abs.resolve(strict=False).relative_to(resolved_cache)
+    except ValueError as exc:
+        raise ValueError(f"Render output resolves outside cache root: {output}") from exc
+    return output_abs
+
+
+def safe_clear_output(output: Path, cache_root: Path) -> None:
+    output = assert_safe_output_path(output, cache_root)
     output.mkdir(parents=True, exist_ok=True)
+    assert_safe_output_path(output, cache_root)
+    candidates: list[Path] = []
     for pattern in ("page-*.webp", "page-*.png"):
-        for path in output.glob(pattern):
-            if path.is_file():
-                path.unlink()
+        candidates.extend(sorted(output.glob(pattern)))
     metrics = output / "metrics.json"
-    if metrics.is_file():
-        metrics.unlink()
+    if metrics.exists() or metrics.is_symlink():
+        candidates.append(metrics)
+
+    # Validate the complete deletion set before unlinking anything. A single
+    # symlink or non-file entry leaves every existing artifact untouched.
+    for path in candidates:
+        assert_safe_output_path(path, cache_root)
+        if not path.is_file():
+            raise ValueError(f"Render cleanup candidate is not a regular file: {path}")
+    for path in candidates:
+        path.unlink()
 
 
-def render(input_path: Path, output: Path, profile: Profile) -> dict:
+def render(input_path: Path, output: Path, profile: Profile, cache_root: Path) -> dict:
+    require_pillow()
     if not features.check("webp"):
         raise SystemExit(
             "This Pillow build lacks WebP support. Keep textual IR or install a Pillow build with WebP."
@@ -143,7 +201,8 @@ def render(input_path: Path, output: Path, profile: Profile) -> dict:
     visual_lines = wrap_lines(text, font, column_width)
     page_count = max(1, math.ceil(len(visual_lines) / rows_per_page))
 
-    safe_clear_output(output)
+    output = assert_safe_output_path(output, cache_root)
+    safe_clear_output(output, cache_root)
     pages: list[dict] = []
 
     for page_index in range(page_count):
@@ -190,11 +249,26 @@ def render(input_path: Path, output: Path, profile: Profile) -> dict:
 
         filename = f"page-{page_index + 1:03d}-of-{page_count:03d}.webp"
         page_path = output / filename
-        image.save(page_path, format="WEBP", lossless=True, method=6)
+        assert_safe_output_path(page_path, cache_root)
+        temporary = page_path.with_name(
+            f".{page_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        )
+        created = False
         try:
-            page_path.chmod(0o600)
-        except OSError:
-            pass
+            fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+            created = True
+            with os.fdopen(fd, "w+b") as handle:
+                image.save(handle, format="WEBP", lossless=True, method=6)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, page_path)
+            created = False
+        finally:
+            if created:
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
         patches = math.ceil(image.width / 32) * math.ceil(image.height / 32)
         pages.append(
             {
@@ -220,7 +294,9 @@ def render(input_path: Path, output: Path, profile: Profile) -> dict:
         "bytes_total": sum(page["bytes"] for page in pages),
         "patch_tokens_estimate_total": sum(page["patch_tokens_estimate"] for page in pages),
     }
-    atomic_json(output / "metrics.json", metrics)
+    metrics_path = output / "metrics.json"
+    assert_safe_output_path(metrics_path, cache_root)
+    atomic_json(metrics_path, metrics)
     return metrics
 
 
@@ -228,6 +304,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path, help="KERN-IL text file")
     parser.add_argument("--output", required=True, type=Path, help="Page output directory")
+    parser.add_argument(
+        "--cache-root",
+        required=True,
+        type=Path,
+        help="Containing .kern directory used for output containment checks",
+    )
     parser.add_argument("--profile", choices=sorted(PROFILES), default="dense")
     return parser.parse_args()
 
@@ -236,7 +318,7 @@ def main() -> int:
     args = parse_args()
     if not args.input.is_file():
         raise SystemExit(f"IR input does not exist: {args.input}")
-    metrics = render(args.input.resolve(), args.output.resolve(), PROFILES[args.profile])
+    metrics = render(args.input.resolve(), args.output, PROFILES[args.profile], args.cache_root)
     json.dump(metrics, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0

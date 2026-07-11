@@ -31,27 +31,30 @@ export function formatName(name: string): string {
 '''
 
 
-@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
-class TestDialectRouting(unittest.TestCase):
-    def test_tsx_dialect_parses_jsx_clean(self):
-        mod = kern_compile.parse_tsjs(TSX_SAMPLE, dialect="tsx")
+class TestGrammarRouting(unittest.TestCase):
+    @unittest.skipUnless(kern_compile.tsjs_available(tsx=True), "tsx grammar not installed")
+    def test_tsx_grammar_parses_jsx_clean(self):
+        mod = kern_compile.parse_tsjs(TSX_SAMPLE, tsx=True)
         self.assertEqual(mod.parse_error, "")
-        self.assertEqual(mod.lang, "tsx")
+        self.assertEqual(mod.lang, "typescript")
 
-    def test_plain_ts_dialect_chokes_on_jsx(self):
+    @unittest.skipUnless(kern_compile.tsjs_available(typescript=True), "typescript grammar not installed")
+    def test_plain_ts_grammar_chokes_on_jsx(self):
         # Documents the routed-around limitation: TS grammar has no JSX.
-        mod = kern_compile.parse_tsjs(TSX_SAMPLE, dialect="ts")
+        mod = kern_compile.parse_tsjs(TSX_SAMPLE, typescript=True)
         self.assertNotEqual(mod.parse_error, "")
 
-    def test_js_dialect_still_default(self):
+    @unittest.skipUnless(kern_compile.tsjs_available(), "javascript grammar not installed")
+    def test_js_grammar_still_default(self):
         mod = kern_compile.parse_tsjs("function f() { return 1; }\n")
         self.assertEqual(mod.lang, "javascript")
 
 
-@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+@unittest.skipUnless(kern_compile.tsjs_available(tsx=True), "tsx grammar not installed")
 class TestComponentDetection(unittest.TestCase):
-    def parse(self, src, dialect="tsx"):
-        return kern_compile.parse_tsjs(src, dialect=dialect)
+    def parse(self, src, **kwargs):
+        kwargs.setdefault("tsx", True)
+        return kern_compile.parse_tsjs(src, **kwargs)
 
     def sym(self, mod, name):
         return next(s for s in mod.symbols if s.name == name)
@@ -104,7 +107,7 @@ class TestComponentDetection(unittest.TestCase):
 
     def test_non_react_file_untouched(self):
         mod = self.parse("export function parse(raw) { return Number(raw); }\n",
-                         dialect="js")
+                         tsx=False)
         self.assertEqual(mod.frontend, "tree-sitter")
         self.assertEqual(self.sym(mod, "parse").kind, "function")
 
@@ -126,10 +129,10 @@ class TestComponentDetection(unittest.TestCase):
         self.assertEqual(self.sym(mod, "Outer").kind, "function")
 
 
-@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+@unittest.skipUnless(kern_compile.tsjs_available(tsx=True), "tsx grammar not installed")
 class TestHooks(unittest.TestCase):
     def component(self, src):
-        mod = kern_compile.parse_tsjs(src, dialect="tsx")
+        mod = kern_compile.parse_tsjs(src, tsx=True)
         return next(s for s in mod.symbols if s.kind == "component")
 
     def hooks(self, src):
@@ -210,10 +213,10 @@ class TestHooks(unittest.TestCase):
         self.assertEqual(faults, [])
 
 
-@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+@unittest.skipUnless(kern_compile.tsjs_available(tsx=True), "tsx grammar not installed")
 class TestRenderTree(unittest.TestCase):
     def render(self, src):
-        mod = kern_compile.parse_tsjs(src, dialect="tsx")
+        mod = kern_compile.parse_tsjs(src, tsx=True)
         comp = next(s for s in mod.symbols if s.kind == "component")
         return comp.react["render"]
 
@@ -330,10 +333,10 @@ class TestRenderTree(unittest.TestCase):
         self.assertIn("dynamic-component+spread-props", risks)
 
 
-@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+@unittest.skipUnless(kern_compile.tsjs_available(tsx=True), "tsx grammar not installed")
 class TestEvents(unittest.TestCase):
     def events(self, src):
-        mod = kern_compile.parse_tsjs(src, dialect="tsx")
+        mod = kern_compile.parse_tsjs(src, tsx=True)
         comp = next(s for s in mod.symbols if s.kind == "component")
         return comp.react["events"]
 
@@ -355,7 +358,7 @@ class TestEvents(unittest.TestCase):
         self.assertEqual(ev[0].action, "analytics.track")
 
     def test_raw_events_cleaned_up(self):
-        mod = kern_compile.parse_tsjs(TSX_SAMPLE, dialect="tsx")
+        mod = kern_compile.parse_tsjs(TSX_SAMPLE, tsx=True)
         comp = next(s for s in mod.symbols if s.kind == "component")
         self.assertNotIn("_raw_events", comp.react)
 
@@ -375,10 +378,10 @@ class TestEvents(unittest.TestCase):
         self.assertEqual(ev[0].action, "set open=true")
 
 
-@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+@unittest.skipUnless(kern_compile.tsjs_available(tsx=True), "tsx grammar not installed")
 class TestEmit(unittest.TestCase):
     def il(self, tier, src=None):
-        mod = kern_compile.parse_tsjs(src or TSX_SAMPLE, dialect="tsx")
+        mod = kern_compile.parse_tsjs(src or TSX_SAMPLE, tsx=True)
         return kern_compile.emit_il(mod, "app/UserCard.tsx", "a" * 64, "none", tier)
 
     def test_l1_head_only(self):
@@ -447,8 +450,8 @@ class TestEmit(unittest.TestCase):
         self.assertIn("Spinner", il)   # guard render visible via RET flow op
 
     def test_l2_component_effects_line(self):
-        # No TSJS call classifies into a named effect class today; the
-        # unknown-calls counter still renders, so EFFECTS must appear.
+        # console.log classifies into the console effect class; useEffect
+        # stays unknown, so both EFFECTS and unknown-calls= must render.
         src = ("function T() {\n"
                "  useEffect(() => { fetch('/api'); }, []);\n"
                "  console.log('x');\n"
@@ -467,10 +470,10 @@ class TestEmit(unittest.TestCase):
         self.assertIn("STATE open=false", il)
 
 
-@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+@unittest.skipUnless(kern_compile.tsjs_available(tsx=True), "tsx grammar not installed")
 class TestRedaction(unittest.TestCase):
     def _il(self, src):
-        mod = kern_compile.parse_tsjs(src, dialect="tsx")
+        mod = kern_compile.parse_tsjs(src, tsx=True)
         return kern_compile.emit_il(mod, "app/T.tsx", "b" * 64, "none", "L3")
 
     def test_prop_default_secret_redacted(self):
@@ -522,7 +525,7 @@ class TestRedaction(unittest.TestCase):
         self.assertNotIn("hunter2-eff", il)
 
 
-@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+@unittest.skipUnless(kern_compile.tsjs_available(), "javascript grammar not installed")
 class TestNoOpOnPlainCode(unittest.TestCase):
     PLAIN = ('import { readFile } from "fs/promises";\n\n'
              "export async function load(url) {\n"
@@ -531,7 +534,7 @@ class TestNoOpOnPlainCode(unittest.TestCase):
              "  return data.toString();\n}\n")
 
     def test_component_kind_absent_and_frontend_plain(self):
-        mod = kern_compile.parse_tsjs(self.PLAIN, dialect="js")
+        mod = kern_compile.parse_tsjs(self.PLAIN)
         self.assertEqual(mod.frontend, "tree-sitter")
         self.assertFalse(any(s.kind == "component" for s in mod.symbols))
         il = kern_compile.emit_il(mod, "src/load.js", "c" * 64, "none", "L2")

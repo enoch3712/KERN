@@ -2,6 +2,22 @@
 
 This directory records KERN's initial representation-compression pilot. The result is evidence about one code artifact and one rendering policy, not a general claim about complete coding-agent cost or accuracy.
 
+## Deterministic compiler record
+
+[`results/python-det-v2.json`](results/python-det-v2.json) is the reproducible
+KERN-IL/0.2 text benchmark for the current redistributable Python fixture. Python
+3.13 is the canonical artifact runtime because stdlib AST rendering is part of
+the compiler environment; CI still runs the full behavior suite on every
+supported matrix runtime. Regenerate the checked-in record with:
+
+```bash
+python3.13 benchmarks/token_bench.py skills/kern/scripts/kern_cache.py \
+  --out benchmarks/results/python-det-v2.json
+```
+
+The record publishes L1/L2/L3 token estimates and per-tier fidelity results. It
+is implementation evidence for that fixture, not a universal compression rate.
+
 ## Result
 
 The redacted input contained 188,329 characters across 3,704 lines of Python.

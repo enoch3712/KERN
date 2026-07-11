@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import importlib.metadata
 import json
 import os
 import re
@@ -21,17 +22,9 @@ from typing import Any, Iterable
 SCHEMA = "kern-cache/0.1"
 CODEC_VERSION = "kern-il/0.2"
 BASELINE_GENERATOR = "kern-det/0.2"
+DERIVATION_MARKER = "kern-derivation/semantic16-v1"
 TSJS_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
-
-
-def tsjs_dialect(suffix: str) -> str:
-    if suffix == ".tsx":
-        return "tsx"
-    if suffix == ".ts":
-        return "ts"
-    return "js"
-
-
+ADDRESSABLE_SYMBOL_KINDS = {"function", "class", "component", "type", "enum", "namespace", "module", "export"}
 CACHE_DIRNAME = ".kern"
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema": SCHEMA,
@@ -83,18 +76,36 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def decode_source_bytes(data: bytes, relative: str) -> str:
+    """Decode source without normalizing or replacing any source bytes."""
+    try:
+        return data.decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"Source is not valid UTF-8: {relative} (byte offset {exc.start}); "
+            "fault the exact bytes with a byte-safe tool"
+        ) from None
+
+
 def atomic_write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    with temporary.open("wb") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
+    created = False
     try:
-        temporary.chmod(0o600)
-    except OSError:
-        pass
-    os.replace(temporary, path)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created = True
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        created = False
+    finally:
+        if created:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def atomic_json(path: Path, value: object) -> None:
@@ -158,15 +169,54 @@ def cache_paths(root: Path) -> dict[str, Path]:
     }
 
 
+def assert_safe_cache_path(root: Path, path: Path) -> Path:
+    """Reject cache paths that escape ``root`` or traverse a symlink.
+
+    Repositories are input, so a pre-existing ``.kern`` tree is not trusted.
+    Following one of its symlinks could write cache data outside the repository;
+    render cleanup could also delete matching page files there.
+    """
+    root_abs = Path(os.path.abspath(root))
+    cache_abs = root_abs / CACHE_DIRNAME
+    target_abs = Path(os.path.abspath(path))
+    try:
+        relative = target_abs.relative_to(cache_abs)
+    except ValueError as exc:
+        raise ValueError(f"Cache path escapes repository .kern directory: {path}") from exc
+
+    current = cache_abs
+    if current.is_symlink():
+        raise ValueError(f"Symlinked cache path is not allowed: {current}")
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"Symlinked cache path is not allowed: {current}")
+
+    resolved_root = root_abs.resolve()
+    resolved_cache = cache_abs.resolve(strict=False)
+    expected_cache = resolved_root / CACHE_DIRNAME
+    if resolved_cache != expected_cache:
+        raise ValueError(f"Cache directory resolves outside repository: {cache_abs}")
+    try:
+        target_abs.resolve(strict=False).relative_to(resolved_cache)
+    except ValueError as exc:
+        raise ValueError(f"Cache path resolves outside repository .kern directory: {path}") from exc
+    return target_abs
+
+
 def initialize(root: Path) -> tuple[dict[str, Path], dict[str, Any]]:
     paths = cache_paths(root)
+    for path in paths.values():
+        assert_safe_cache_path(root, path)
     for key in ("cache", "ir", "images", "jobs", "staging"):
         paths[key].mkdir(parents=True, exist_ok=True)
+        assert_safe_cache_path(root, paths[key])
         try:
             paths[key].chmod(0o700)
         except OSError:
             pass
     gitignore = paths["cache"] / ".gitignore"
+    assert_safe_cache_path(root, gitignore)
     if not gitignore.exists():
         atomic_write(gitignore, b"*\n!.gitignore\n")
     if paths["config"].exists():
@@ -183,6 +233,7 @@ def initialize(root: Path) -> tuple[dict[str, Path], dict[str, Any]]:
             {
                 "schema": SCHEMA,
                 "codec_version": CODEC_VERSION,
+                "derivation_marker": DERIVATION_MARKER,
                 "repo_root": str(root),
                 "updated_at": now_iso(),
                 "files": {},
@@ -191,19 +242,40 @@ def initialize(root: Path) -> tuple[dict[str, Path], dict[str, Any]]:
     else:
         with CacheLock(paths["lock"]):
             manifest = load_manifest(paths["manifest"], root)
-            if manifest.get("codec_version") != CODEC_VERSION:
-                for record in manifest["files"].values():
+            codec_changed = manifest.get("codec_version") != CODEC_VERSION
+            derivation_changed = manifest.get("derivation_marker") != DERIVATION_MARKER
+            legacy_records = [
+                record
+                for record in manifest["files"].values()
+                if record.get("status") in {"ready", "baseline_ready"}
+                and (
+                    not record.get("ir_compiler_fingerprint")
+                    or record.get("ir_derivation_marker") != DERIVATION_MARKER
+                )
+            ]
+            if codec_changed or derivation_changed or legacy_records:
+                invalidated = (
+                    list(manifest["files"].values())
+                    if codec_changed or derivation_changed
+                    else legacy_records
+                )
+                for record in invalidated:
                     if record.get("status") not in {"deleted", "missing"}:
                         record["status"] = "stale"
                     record["image_status"] = "stale"
                 manifest["codec_version"] = CODEC_VERSION
-                manifest["codec_invalidated_at"] = now_iso()
+                manifest["derivation_marker"] = DERIVATION_MARKER
+                if codec_changed:
+                    manifest["codec_invalidated_at"] = now_iso()
+                if derivation_changed or legacy_records:
+                    manifest["derivation_invalidated_at"] = now_iso()
                 manifest["updated_at"] = now_iso()
                 atomic_json(paths["manifest"], manifest)
     return paths, config
 
 
 def load_manifest(path: Path, root: Path) -> dict[str, Any]:
+    assert_safe_cache_path(root, path)
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -212,7 +284,16 @@ def load_manifest(path: Path, root: Path) -> dict[str, Any]:
         raise RuntimeError(f"Unsupported manifest schema: {manifest.get('schema')!r}")
     if Path(manifest.get("repo_root", "")).resolve() != root.resolve():
         raise RuntimeError("Manifest repository root does not match --repo")
-    manifest.setdefault("files", {})
+    files = manifest.setdefault("files", {})
+    if not isinstance(files, dict):
+        raise RuntimeError("Manifest files must be a JSON object")
+    for relative, record in files.items():
+        if not isinstance(relative, str) or not isinstance(record, dict):
+            raise RuntimeError("Manifest contains an invalid file record")
+        try:
+            artifact_paths(cache_paths(root), relative)
+        except ValueError as exc:
+            raise RuntimeError(f"Manifest contains an unsafe source path: {relative!r}") from exc
     return manifest
 
 
@@ -232,6 +313,14 @@ def normalize_rel(root: Path, value: str, require_file: bool = True) -> tuple[st
 
 def artifact_paths(paths: dict[str, Path], relative: str) -> dict[str, Path]:
     rel_path = Path(relative)
+    if (
+        not relative
+        or rel_path.is_absolute()
+        or rel_path.as_posix() != relative
+        or CACHE_DIRNAME in rel_path.parts
+        or any(part in {"", ".", ".."} for part in rel_path.parts)
+    ):
+        raise ValueError(f"Invalid cache artifact source path: {relative!r}")
     return {
         "ir": paths["ir"] / Path(relative + ".kern-il.txt"),
         "images": paths["images"] / rel_path,
@@ -259,24 +348,6 @@ def git_files(root: Path) -> list[str] | None:
         return [item.decode("utf-8", "surrogateescape") for item in result.stdout.split(b"\0") if item]
     except (OSError, subprocess.SubprocessError):
         return None
-
-
-def git_revision(root: Path) -> str:
-    try:
-        head = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True,
-        )
-        if head.returncode != 0:
-            return "none"
-        sha = head.stdout.strip()
-        dirty = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True,
-        )
-        return f"dirty:{sha}" if dirty.stdout.strip() else sha
-    except OSError:
-        return "none"
 
 
 def walk_files(root: Path, excluded: set[str]) -> Iterable[str]:
@@ -379,6 +450,8 @@ def scan(root: Path, paths: dict[str, Path], config: dict[str, Any]) -> dict[str
 
 
 def refresh_one(root: Path, paths: dict[str, Path], relative: str, source: Path) -> tuple[str, dict[str, Any]]:
+    for artifact in artifact_paths(paths, relative).values():
+        assert_safe_cache_path(root, artifact)
     data = source.read_bytes()
     if b"\x00" in data[:8192]:
         raise ValueError(f"Binary source is not supported: {relative}")
@@ -457,13 +530,75 @@ def stub_ir(text: str, relative: str, digest: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def baseline_for(root: Path, source: Path, relative: str, digest: str,
-                 config: dict[str, Any], tier: str | None = None) -> tuple[str, str]:
-    """Return (il_text, tier_used)."""
-    text = source.read_text(encoding="utf-8", errors="replace")
-    if max(1, len(text) // 4) < int(config.get("min_ir_tokens", 600)):
-        return stub_ir(text, relative, digest), "stub"
+def resolve_tier(config: dict[str, Any], tier: str | None) -> str:
     selected = tier or str(config.get("default_tier", "L2"))
+    if selected not in {"L1", "L2", "L3"}:
+        raise ValueError(f"Unsupported deterministic IL tier: {selected}")
+    return selected
+
+
+def _distribution_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "absent"
+    except Exception:
+        return "unknown"
+
+
+def compiler_fingerprint(
+    source: Path,
+    config: dict[str, Any],
+    selected_tier: str,
+    mode: str,
+) -> str:
+    """Hash every effective input that can change deterministic IL bytes."""
+    import kern_compile
+
+    compiler_path = Path(kern_compile.__file__ or "")
+    compiler_sha = sha256_file(compiler_path) if compiler_path.is_file() else "unknown"
+    suffix = source.suffix.lower()
+    capabilities: dict[str, Any] = {
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+    }
+    if suffix in TSJS_SUFFIXES:
+        capabilities.update(
+            {
+                "tree-sitter": _distribution_version("tree-sitter"),
+                "tree-sitter-javascript": _distribution_version("tree-sitter-javascript"),
+                "tree-sitter-typescript": _distribution_version("tree-sitter-typescript"),
+            }
+        )
+        try:
+            capabilities["tsjs"] = kern_compile.tsjs_capability_fingerprint()
+        except Exception:
+            capabilities["tsjs"] = "unavailable"
+    payload = {
+        "codec": CODEC_VERSION,
+        "generator": BASELINE_GENERATOR,
+        "derivation_marker": DERIVATION_MARKER,
+        "compiler_sha256": compiler_sha,
+        "source_suffix": suffix,
+        "tier": selected_tier,
+        "mode": mode,
+        "min_ir_tokens": int(config.get("min_ir_tokens", 600)),
+        "default_tier": str(config.get("default_tier", "L2")),
+        "capabilities": capabilities,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return sha256_bytes(encoded)
+
+
+def baseline_for(root: Path, source: Path, relative: str, digest: str,
+                 config: dict[str, Any], tier: str | None = None) -> tuple[str, str, str]:
+    """Return ``(il_text, resolved_tier, mode)`` for exact UTF-8 source bytes."""
+    data = source.read_bytes()
+    if sha256_bytes(data) != digest:
+        raise RuntimeError("Source changed before baseline IR generation; retry ensure")
+    text = decode_source_bytes(data, relative)
+    selected = resolve_tier(config, tier)
+    if max(1, len(text) // 4) < int(config.get("min_ir_tokens", 600)):
+        return stub_ir(text, relative, digest), selected, "source-cheaper"
     note = "generic language fallback"
     try:
         import kern_compile
@@ -471,57 +606,142 @@ def baseline_for(root: Path, source: Path, relative: str, digest: str,
         module = None
         if suffix == ".py":
             module = kern_compile.parse_python(text)
-        elif suffix in TSJS_SUFFIXES and kern_compile.tsjs_available():
-            module = kern_compile.parse_tsjs(text, dialect=tsjs_dialect(suffix))
+        elif suffix in TSJS_SUFFIXES:
+            is_tsx = suffix == ".tsx"
+            is_typescript = suffix in {".ts", ".tsx"}
+            if kern_compile.tsjs_available(typescript=is_typescript, tsx=is_tsx):
+                module = kern_compile.parse_tsjs(text, typescript=is_typescript, tsx=is_tsx)
         if module is not None:
             if module.parse_error:
                 note = f"parse failed: {module.parse_error}"
             else:
-                revision = git_revision(root)
-                return kern_compile.emit_il(module, relative, digest, revision, selected), selected
+                apply_handles = getattr(kern_compile, "apply_semantic_handles", None)
+                if callable(apply_handles):
+                    module = apply_handles(module)
+                return (
+                    kern_compile.emit_il(module, relative, digest, "none", selected),
+                    selected,
+                    f"structured:{module.frontend}",
+                )
     except Exception as exc:
-        note = f"deterministic compiler failed: {exc}"
-    return generic_ir(text, relative, digest, note), "generic"
+        note = f"deterministic compiler failed: {redact_line(str(exc))}"
+    return generic_ir(text, relative, digest, note), selected, "generic-line-baseline"
+
+
+def _record_usable(
+    record: dict[str, Any],
+    digest: str,
+    ir_path: Path,
+    selected_tier: str,
+    expected_fingerprint: str,
+) -> bool:
+    if (
+        record.get("status") not in {"ready", "baseline_ready"}
+        or record.get("ir_source_sha256") != digest
+        or record.get("ir_tier") != selected_tier
+        or record.get("ir_derivation_marker") != DERIVATION_MARKER
+        or record.get("ir_compiler_fingerprint") != expected_fingerprint
+        or not ir_path.is_file()
+    ):
+        return False
+    try:
+        return record.get("ir_sha256") == sha256_file(ir_path)
+    except OSError:
+        return False
+
+
+def _record_derivation_current(
+    record: dict[str, Any], source: Path, config: dict[str, Any]
+) -> bool:
+    tier = record.get("ir_tier")
+    mode = record.get("ir_mode")
+    if (
+        tier not in {"L1", "L2", "L3"}
+        or not isinstance(mode, str)
+        or not mode
+        or record.get("ir_derivation_marker") != DERIVATION_MARKER
+        or not record.get("ir_compiler_fingerprint")
+    ):
+        return False
+    try:
+        expected = compiler_fingerprint(source, config, tier, mode)
+    except Exception:
+        return False
+    return record.get("ir_compiler_fingerprint") == expected
 
 
 def ensure_file(root: Path, paths: dict[str, Path], relative: str, source: Path,
                 config: dict[str, Any], tier: str | None = None) -> dict[str, Any]:
-    digest, record = refresh_one(root, paths, relative, source)
+    selected = resolve_tier(config, tier)
     artifacts = artifact_paths(paths, relative)
-    ir_exists = artifacts["ir"].is_file()
-    usable = (
-        record.get("status") in {"ready", "baseline_ready"}
-        and record.get("ir_source_sha256") == digest
-        and ir_exists
-        and record.get("ir_sha256") == sha256_file(artifacts["ir"])
-        and (tier is None or record.get("ir_tier") == tier)
-    )
+    for artifact in artifacts.values():
+        assert_safe_cache_path(root, artifact)
+    digest, _ = refresh_one(root, paths, relative, source)
+    cache_hit = False
+    with CacheLock(paths["lock"]):
+        manifest = load_manifest(paths["manifest"], root)
+        record = manifest["files"].get(relative, {})
+        mode = str(record.get("ir_mode", ""))
+        expected_fingerprint = compiler_fingerprint(source, config, selected, mode)
+        usable = (
+            sha256_file(source) == digest
+            and _record_usable(record, digest, artifacts["ir"], selected, expected_fingerprint)
+        )
+        cache_hit = usable
     if not usable:
-        ir, tier_used = baseline_for(root, source, relative, digest, config, tier)
+        ir, tier_used, mode = baseline_for(root, source, relative, digest, config, tier)
+        payload = ir.encode("utf-8")
+        payload_sha = sha256_bytes(payload)
+        expected_fingerprint = compiler_fingerprint(source, config, tier_used, mode)
         if sha256_file(source) != digest:
             raise RuntimeError("Source changed while baseline IR was generated; retry ensure")
-        atomic_write(artifacts["ir"], ir.encode("utf-8"))
         with CacheLock(paths["lock"]):
             manifest = load_manifest(paths["manifest"], root)
             current = manifest["files"].get(relative, {})
             if current.get("source_sha256") != digest or sha256_file(source) != digest:
                 raise RuntimeError("Source changed before baseline IR commit; retry ensure")
-            current.update(
-                {
-                    "status": "baseline_ready",
-                    "ir_source_sha256": digest,
-                    "ir_sha256": sha256_file(artifacts["ir"]),
-                    "ir_generator": BASELINE_GENERATOR,
-                    "ir_tier": tier_used,
-                    "image_status": "stale",
-                    "ir_rel": artifacts["ir"].relative_to(root).as_posix(),
-                    "images_rel": artifacts["images"].relative_to(root).as_posix(),
-                    "ir_updated_at": now_iso(),
-                }
-            )
-            manifest["files"][relative] = current
-            manifest["updated_at"] = now_iso()
-            atomic_json(paths["manifest"], manifest)
+            current_mode = str(current.get("ir_mode", ""))
+            current_fingerprint = compiler_fingerprint(source, config, selected, current_mode)
+            if _record_usable(
+                current, digest, artifacts["ir"], selected, current_fingerprint
+            ):
+                cache_hit = True
+            else:
+                atomic_write(artifacts["ir"], payload)
+                after_sha = sha256_file(source)
+                if after_sha != digest:
+                    current.update(
+                        {
+                            "source_sha256": after_sha,
+                            "status": "stale",
+                            "image_status": "stale",
+                            "changed_at": now_iso(),
+                        }
+                    )
+                    manifest["files"][relative] = current
+                    manifest["updated_at"] = now_iso()
+                    atomic_json(paths["manifest"], manifest)
+                    raise RuntimeError("Source changed during baseline IR commit; retry ensure")
+                current.update(
+                    {
+                        "status": "baseline_ready",
+                        "ir_source_sha256": digest,
+                        "ir_sha256": payload_sha,
+                        "ir_generator": BASELINE_GENERATOR,
+                        "ir_codec_version": CODEC_VERSION,
+                        "ir_derivation_marker": DERIVATION_MARKER,
+                        "ir_tier": tier_used,
+                        "ir_mode": mode,
+                        "ir_compiler_fingerprint": expected_fingerprint,
+                        "image_status": "stale",
+                        "ir_rel": artifacts["ir"].relative_to(root).as_posix(),
+                        "images_rel": artifacts["images"].relative_to(root).as_posix(),
+                        "ir_updated_at": now_iso(),
+                    }
+                )
+                manifest["files"][relative] = current
+                manifest["updated_at"] = now_iso()
+                atomic_json(paths["manifest"], manifest)
             record = current
     return {
         "ok": True,
@@ -533,6 +753,9 @@ def ensure_file(root: Path, paths: dict[str, Path], relative: str, source: Path,
         "images": str(artifacts["images"]),
         "needs_enrichment": record.get("status") != "ready",
         "generator": record.get("ir_generator"),
+        "tier": record.get("ir_tier"),
+        "mode": record.get("ir_mode"),
+        "cache_hit": cache_hit,
     }
 
 
@@ -542,6 +765,7 @@ def prepare_file(root: Path, paths: dict[str, Path], relative: str, source: Path
     digest = ensured["source_sha256"]
     job_id = uuid.uuid4().hex
     staging = paths["staging"] / Path(relative + f".{digest[:12]}.{job_id}.kern-il.txt")
+    assert_safe_cache_path(root, staging)
     staging.parent.mkdir(parents=True, exist_ok=True)
     job = {
         "schema": "kern-job/0.1",
@@ -556,6 +780,7 @@ def prepare_file(root: Path, paths: dict[str, Path], relative: str, source: Path
         "status": "prepared",
     }
     artifact = artifact_paths(paths, relative)
+    assert_safe_cache_path(root, artifact["job"])
     atomic_json(artifact["job"], job)
     return {"ok": True, "operation": "prepare", **job}
 
@@ -594,6 +819,8 @@ def commit_file(
     if not headers.get("generator"):
         raise ValueError("Staging IR does not declare a generator")
     artifacts = artifact_paths(paths, relative)
+    assert_safe_cache_path(root, artifacts["ir"])
+    assert_safe_cache_path(root, artifacts["job"])
     with CacheLock(paths["lock"]):
         baseline_path = artifacts["ir"]
         if not baseline_path.is_file():
@@ -659,6 +886,93 @@ def commit_file(
     }
 
 
+def _mark_render_failed(
+    root: Path,
+    paths: dict[str, Path],
+    relative: str,
+    render_id: str,
+    error: str,
+) -> None:
+    """Best-effort transition out of ``rendering`` without masking the cause."""
+    try:
+        with CacheLock(paths["lock"]):
+            manifest = load_manifest(paths["manifest"], root)
+            current = manifest["files"].get(relative, {})
+            if current.get("image_render_id") != render_id:
+                return
+            current["image_status"] = "stale"
+            current["image_error"] = redact_line(error)
+            current.pop("image_render_id", None)
+            manifest["files"][relative] = current
+            manifest["updated_at"] = now_iso()
+            atomic_json(paths["manifest"], manifest)
+    except Exception:
+        pass
+
+
+def _validate_render_artifacts(
+    metrics: Any,
+    artifacts: dict[str, Path],
+    pinned_ir_sha: str,
+    selected_profile: str,
+) -> None:
+    if not isinstance(metrics, dict):
+        raise RuntimeError("IR renderer metrics must be a JSON object")
+    if metrics.get("schema") != "kern-render/0.1":
+        raise RuntimeError("IR renderer metrics have an unsupported schema")
+    if metrics.get("input_sha256") != pinned_ir_sha:
+        raise RuntimeError("IR renderer metrics do not match the pinned IR digest")
+    profile = metrics.get("profile")
+    if not isinstance(profile, dict) or profile.get("name") != selected_profile:
+        raise RuntimeError("IR renderer metrics do not match the requested profile")
+    pages = metrics.get("pages")
+    page_count = metrics.get("page_count")
+    if (
+        not isinstance(pages, list)
+        or not pages
+        or not isinstance(page_count, int)
+        or isinstance(page_count, bool)
+        or page_count != len(pages)
+    ):
+        raise RuntimeError("IR renderer metrics contain an invalid page list")
+
+    metrics_path = artifacts["images"] / "metrics.json"
+    try:
+        stored_metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("IR renderer did not create a valid metrics.json artifact") from exc
+    if stored_metrics != metrics:
+        raise RuntimeError("IR renderer stdout does not match metrics.json")
+
+    image_root = artifacts["images"].resolve()
+    total_bytes = 0
+    seen: set[Path] = set()
+    for index, page in enumerate(pages, 1):
+        if not isinstance(page, dict) or page.get("page") != index:
+            raise RuntimeError("IR renderer metrics contain an invalid page record")
+        raw_path = page.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise RuntimeError("IR renderer metrics contain an invalid page path")
+        page_path = Path(raw_path).resolve()
+        if page_path.parent != image_root or page_path in seen or page_path.suffix.lower() != ".webp":
+            raise RuntimeError("IR renderer page path is outside the expected output set")
+        seen.add(page_path)
+        if not page_path.is_file():
+            raise RuntimeError("IR renderer did not create every declared page artifact")
+        actual_bytes = page_path.stat().st_size
+        declared_bytes = page.get("bytes")
+        if (
+            actual_bytes <= 0
+            or not isinstance(declared_bytes, int)
+            or isinstance(declared_bytes, bool)
+            or declared_bytes != actual_bytes
+        ):
+            raise RuntimeError("IR renderer page artifact size does not match metrics")
+        total_bytes += actual_bytes
+    if metrics.get("bytes_total") != total_bytes:
+        raise RuntimeError("IR renderer total byte count does not match page artifacts")
+
+
 def render_file(
     root: Path,
     paths: dict[str, Path],
@@ -667,54 +981,123 @@ def render_file(
     source: Path,
     profile: str | None,
 ) -> dict[str, Any]:
-    digest, record = refresh_one(root, paths, relative, source)
     artifacts = artifact_paths(paths, relative)
-    if (
-        record.get("status") not in {"ready", "baseline_ready"}
-        or record.get("ir_source_sha256") != digest
-        or not artifacts["ir"].is_file()
-        or record.get("ir_sha256") != sha256_file(artifacts["ir"])
-    ):
-        raise RuntimeError("IR is missing or stale; run ensure and, when available, KERN commit first")
-    selected = profile or str(config.get("image_profile", "dense"))
-    renderer = Path(__file__).resolve().with_name("render_ir.py")
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(renderer),
-            "--input",
-            str(artifacts["ir"]),
-            "--output",
-            str(artifacts["images"]),
-            "--profile",
-            selected,
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "IR renderer failed")
-    metrics = json.loads(result.stdout)
+    assert_safe_cache_path(root, artifacts["ir"])
+    assert_safe_cache_path(root, artifacts["images"])
+    artifacts["images"].mkdir(parents=True, exist_ok=True)
+    assert_safe_cache_path(root, artifacts["images"])
+    render_lock = artifacts["images"] / ".render.lock"
+    assert_safe_cache_path(root, render_lock)
+    with CacheLock(render_lock, timeout=300.0, stale_after=900.0):
+        return _render_file_locked(root, paths, config, relative, source, profile)
+
+
+def _render_file_locked(
+    root: Path,
+    paths: dict[str, Path],
+    config: dict[str, Any],
+    relative: str,
+    source: Path,
+    profile: str | None,
+) -> dict[str, Any]:
+    digest, _ = refresh_one(root, paths, relative, source)
+    artifacts = artifact_paths(paths, relative)
+    render_id = uuid.uuid4().hex
     with CacheLock(paths["lock"]):
         manifest = load_manifest(paths["manifest"], root)
-        current = manifest["files"].get(relative, {})
-        if current.get("source_sha256") != digest:
-            raise RuntimeError("Source changed while IR images were rendered")
-        current.update(
-            {
-                "image_source_sha256": digest,
-                "image_ir_sha256": sha256_file(artifacts["ir"]),
-                "image_profile": selected,
-                "image_status": "ready",
-                "image_metrics_rel": (artifacts["images"] / "metrics.json").relative_to(root).as_posix(),
-                "images_updated_at": now_iso(),
-            }
-        )
-        manifest["files"][relative] = current
+        record = manifest["files"].get(relative, {})
+        if (
+            record.get("status") not in {"ready", "baseline_ready"}
+            or record.get("source_sha256") != digest
+            or record.get("ir_source_sha256") != digest
+            or sha256_file(source) != digest
+            or not artifacts["ir"].is_file()
+            or record.get("ir_sha256") != sha256_file(artifacts["ir"])
+            or not _record_derivation_current(record, source, config)
+        ):
+            raise RuntimeError(
+                "IR or its compiler derivation is missing or stale; run ensure and, "
+                "when available, KERN commit first"
+            )
+        pinned_ir_sha = str(record["ir_sha256"])
+        record["image_status"] = "rendering"
+        record["image_render_id"] = render_id
+        record.pop("image_error", None)
+        manifest["files"][relative] = record
         manifest["updated_at"] = now_iso()
         atomic_json(paths["manifest"], manifest)
+    selected = profile or str(config.get("image_profile", "dense"))
+    renderer = Path(__file__).resolve().with_name("render_ir.py")
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(renderer),
+                "--input",
+                str(artifacts["ir"]),
+                "--output",
+                str(artifacts["images"]),
+                "--cache-root",
+                str(paths["cache"]),
+                "--profile",
+                selected,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            message = result.stderr.strip() or result.stdout.strip() or "IR renderer failed"
+            raise RuntimeError(redact_line(message))
+        try:
+            metrics = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("IR renderer produced invalid metrics JSON") from exc
+        _validate_render_artifacts(metrics, artifacts, pinned_ir_sha, selected)
+    except Exception as exc:
+        _mark_render_failed(root, paths, relative, render_id, str(exc))
+        raise
+    try:
+        with CacheLock(paths["lock"]):
+            manifest = load_manifest(paths["manifest"], root)
+            current = manifest["files"].get(relative, {})
+            source_matches = current.get("source_sha256") == digest and sha256_file(source) == digest
+            ir_matches = (
+                current.get("ir_source_sha256") == digest
+                and current.get("ir_sha256") == pinned_ir_sha
+                and artifacts["ir"].is_file()
+                and sha256_file(artifacts["ir"]) == pinned_ir_sha
+            )
+            owns_render = current.get("image_render_id") == render_id
+            if not source_matches or not ir_matches or not owns_render:
+                current["image_status"] = "stale"
+                current["image_error"] = "source changed" if not source_matches else "IR changed"
+                current.pop("image_render_id", None)
+                manifest["files"][relative] = current
+                manifest["updated_at"] = now_iso()
+                atomic_json(paths["manifest"], manifest)
+                if not source_matches:
+                    raise RuntimeError("Source changed while IR images were rendered")
+                raise RuntimeError("IR changed while IR images were rendered")
+            current.update(
+                {
+                    "image_source_sha256": digest,
+                    "image_ir_sha256": pinned_ir_sha,
+                    "image_profile": selected,
+                    "image_status": "ready",
+                    "image_metrics_rel": (artifacts["images"] / "metrics.json").relative_to(root).as_posix(),
+                    "images_updated_at": now_iso(),
+                }
+            )
+            current.pop("image_render_id", None)
+            current.pop("image_error", None)
+            manifest["files"][relative] = current
+            manifest["updated_at"] = now_iso()
+            atomic_json(paths["manifest"], manifest)
+    except Exception as exc:
+        _mark_render_failed(root, paths, relative, render_id, str(exc))
+        raise
     return {"ok": True, "operation": "render", "source_rel": relative, **metrics}
 
 
@@ -780,8 +1163,10 @@ def sync_cache(
 
 
 def paths_for(root: Path, paths: dict[str, Path], relative: str, source: Path) -> dict[str, Any]:
-    digest, record = refresh_one(root, paths, relative, source)
     artifacts = artifact_paths(paths, relative)
+    for artifact in artifacts.values():
+        assert_safe_cache_path(root, artifact)
+    digest, record = refresh_one(root, paths, relative, source)
     return {
         "ok": True,
         "operation": "paths",
@@ -801,7 +1186,7 @@ def fault_source(source: Path, relative: str, start: int | None, end: int | None
     digest = sha256_bytes(data)
     if expected and expected != digest:
         raise RuntimeError(f"Source hash mismatch: expected {expected}, current {digest}")
-    text = data.decode("utf-8", "strict")
+    text = decode_source_bytes(data, relative)
     # Split on "\n" only, matching ast/tree-sitter line numbering; str.splitlines()
     # also breaks on \v, \f, \x1c-\x1e, \x85, U+2028, U+2029, etc., which would
     # silently return the wrong bytes for a requested line range.
@@ -833,49 +1218,88 @@ def verify_symbol(root: Path, paths: dict[str, Path], relative: str, source: Pat
                   symbol: str, expected_hash: str, expected_span: str | None = None) -> dict[str, Any]:
     import kern_compile
     data = source.read_bytes()
-    text = data.decode("utf-8", "replace")
+    text = decode_source_bytes(data, relative)
     suffix = source.suffix.lower()
     if suffix == ".py":
         module = kern_compile.parse_python(text)
-    elif suffix in TSJS_SUFFIXES and kern_compile.tsjs_available():
-        module = kern_compile.parse_tsjs(text, dialect=tsjs_dialect(suffix))
+    elif suffix in TSJS_SUFFIXES:
+        is_tsx = suffix == ".tsx"
+        is_typescript = suffix in {".ts", ".tsx"}
+        if not kern_compile.tsjs_available(typescript=is_typescript, tsx=is_tsx):
+            raise ValueError(
+                f"verify parser is unavailable for {suffix}; use fault with --expect-sha"
+            )
+        module = kern_compile.parse_tsjs(text, typescript=is_typescript, tsx=is_tsx)
     else:
         raise ValueError(f"verify does not support {suffix or 'this file type'}; use fault with --expect-sha")
     if module.parse_error:
         raise RuntimeError(f"current source does not parse ({module.parse_error}); fault exact source")
-    base = {"ok": True, "operation": "verify", "source_rel": relative, "symbol": symbol,
-            "source_sha256": sha256_bytes(data)}
-    matches = [s for s in module.symbols if s.kind in {"function", "class", "component"} and s.name == symbol]
+    apply_handles = getattr(kern_compile, "apply_semantic_handles", None)
+    semantic_handles = callable(apply_handles)
+    if semantic_handles:
+        module = apply_handles(module)
+
+    def handle_of(sym) -> str:
+        if semantic_handles:
+            handle = getattr(sym, "semantic8", "")
+            if not handle:
+                raise RuntimeError("deterministic compiler did not produce a semantic source handle")
+            return handle
+        return sym.slice8
+
+    base = {"operation": "verify", "source_rel": relative, "symbol": symbol,
+            "source_sha256": sha256_bytes(data),
+            "verification_basis": "module-semantic-handle" if semantic_handles else "symbol-slice-hash"}
+
+    def response(result: str, **fields: Any) -> dict[str, Any]:
+        return {**base, "ok": result in {"ok", "moved"}, "result": result, **fields}
+
+    matches = [
+        s for s in module.symbols
+        if s.kind in ADDRESSABLE_SYMBOL_KINDS and s.name == symbol
+    ]
     if not matches:
-        return {**base, "result": "stale", "reason": "symbol-not-found"}
+        return response("stale", reason="symbol-not-found")
 
     def span_of(sym) -> str:
         return f"L{sym.span[0]}-{sym.span[1]}"
 
-    hash_hit = next((m for m in matches if m.slice8 == expected_hash), None)
+    hash_hit = next((m for m in matches if handle_of(m) == expected_hash), None)
     if hash_hit is not None:
         current_span = span_of(hash_hit)
         if expected_span is None or expected_span == current_span:
-            return {**base, "result": "ok", "current_span": current_span}
-        return {**base, "result": "moved", "current_span": current_span}
+            return response("ok", current_span=current_span)
+        return response("moved", current_span=current_span)
 
     span_hit = None
     if expected_span:
         span_hit = next((m for m in matches if span_of(m) == expected_span), None)
     if span_hit is not None:
-        return {**base, "result": "stale", "reason": "symbol-bytes-changed",
-                "current_hash": span_hit.slice8, "current_span": span_of(span_hit)}
+        return response(
+            "stale",
+            reason="source-handle-changed",
+            current_hash=handle_of(span_hit),
+            current_span=span_of(span_hit),
+        )
 
     found = matches[0]
-    return {**base, "result": "stale", "reason": "symbol-bytes-changed",
-            "current_hash": found.slice8, "current_span": span_of(found),
-            "candidates": [{"span": span_of(m), "hash": m.slice8} for m in matches]}
+    return response(
+        "stale",
+        reason="source-handle-changed",
+        current_hash=handle_of(found),
+        current_span=span_of(found),
+        candidates=[{"span": span_of(m), "hash": handle_of(m)} for m in matches],
+    )
 
 
 def log_event(paths: dict[str, Path], entry: dict[str, Any]) -> None:
     """Append one JSON line to the operation log. Never raises."""
     try:
-        with paths["log"].open("a", encoding="utf-8") as handle:
+        assert_safe_cache_path(paths["cache"].parent, paths["log"])
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(paths["log"], flags, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, sort_keys=True) + "\n")
     except (OSError, TypeError, ValueError):
         pass
@@ -917,6 +1341,7 @@ def ensure_log_fields(
 def read_log_entries(paths: dict[str, Path], tail: int, op_filter: str | None) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     try:
+        assert_safe_cache_path(paths["cache"].parent, paths["log"])
         with paths["log"].open("r", encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
@@ -931,7 +1356,7 @@ def read_log_entries(paths: dict[str, Path], tail: int, op_filter: str | None) -
                 if op_filter and entry.get("op") != op_filter:
                     continue
                 entries.append(entry)
-    except OSError:
+    except (OSError, ValueError):
         return []
     if tail is not None and tail >= 0:
         entries = entries[-tail:] if tail > 0 else []
@@ -1052,17 +1477,18 @@ def main() -> int:
                 raise RuntimeError(f"Unknown command: {args.command}")
         json.dump(result, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
+        operation_ok = bool(result.get("ok", True))
         entry = {
             "ts": now_iso(),
             "op": args.command,
             "duration_ms": int((time.monotonic() - started) * 1000),
-            "ok": True,
+            "ok": operation_ok,
         }
         entry.update(log_fields_from_result(result))
         if args.command == "ensure" and relative is not None and source is not None:
             entry.update(ensure_log_fields(paths, relative, source, result))
         log_event(paths, entry)
-        return 0
+        return 0 if operation_ok else 1
     except Exception as exc:
         if paths is not None:
             error_entry: dict[str, Any] = {

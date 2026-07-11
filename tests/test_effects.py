@@ -40,6 +40,25 @@ class TestClassify(unittest.TestCase):
     def test_unknown(self):
         self.assertEqual(kern_compile.classify_call("frobnicate"), [])
 
+    def test_python_open_modes_and_chained_calls(self):
+        self.assertEqual(kern_compile.classify_call('open("x")'), ["fs:read"])
+        self.assertEqual(kern_compile.classify_call('open("x", "w")'), ["fs:write"])
+        self.assertEqual(
+            set(kern_compile.classify_call('open("x", mode="r+")')),
+            {"fs:read", "fs:write"},
+        )
+        self.assertIn(
+            "fs:write",
+            kern_compile.classify_call('Path("x").open("w").write("payload")'),
+        )
+
+    def test_javascript_effects_are_language_specific(self):
+        self.assertEqual(kern_compile.classify_call("open(url)", "javascript"), [])
+        self.assertIn("net", kern_compile.classify_call("fetch(url)", "javascript"))
+        self.assertIn("fs:read", kern_compile.classify_call('readFile("x")', "javascript"))
+        self.assertIn("fs:write", kern_compile.classify_call('fs.promises.writeFile("x", data)', "javascript"))
+        self.assertIn("thread", kern_compile.classify_call('new Worker("x.js")', "javascript"))
+
 
 class TestPropagate(unittest.TestCase):
     def setUp(self):
@@ -71,6 +90,47 @@ class TestPropagate(unittest.TestCase):
         kern_compile.propagate(self.mod)
         after = {s.name: dict(s.effects) for s in self.mod.symbols}
         self.assertEqual(before, after)
+
+    def test_member_tail_does_not_invent_local_edge(self):
+        src = (
+            "class Parser:\n"
+            "    def parse(self):\n"
+            "        raise SyntaxError()\n\n"
+            "def route(obj):\n"
+            "    return obj.parse()\n"
+        )
+        mod = kern_compile.parse_python(src)
+        kern_compile.propagate(mod)
+        route = next(s for s in mod.symbols if s.name == "route")
+        self.assertNotIn("SyntaxError", route.raises_all)
+        self.assertEqual(route.unknown_calls, 1)
+
+    def test_explicit_self_call_resolves_within_owner(self):
+        src = (
+            "class Parser:\n"
+            "    def parse(self):\n"
+            "        raise SyntaxError()\n"
+            "    def route(self):\n"
+            "        return self.parse()\n"
+        )
+        mod = kern_compile.parse_python(src)
+        kern_compile.propagate(mod)
+        route = next(s for s in mod.symbols if s.name == "Parser.route")
+        self.assertIn("SyntaxError", route.raises_all)
+        self.assertIn("Parser.parse", route.raises_all["SyntaxError"])
+
+    def test_structural_effects_keep_mixed_known_calls(self):
+        src = (
+            "def mixed(path):\n"
+            "    open(path, 'w').write('x')\n"
+            "    subprocess.run(['true'])\n"
+        )
+        mod = kern_compile.parse_python(src)
+        kern_compile.propagate(mod)
+        effects = next(s for s in mod.symbols if s.name == "mixed").effects
+        self.assertIn("fs:write", effects)
+        self.assertIn("proc", effects)
+        self.assertNotIn("fs:read", effects)
 
 
 if __name__ == "__main__":

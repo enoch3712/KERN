@@ -42,7 +42,7 @@ class TestEmitter(unittest.TestCase):
     def test_function_line_format(self):
         il = emit("L2")
         fline = next(l for l in il.splitlines() if l.startswith("F load_entry"))
-        self.assertRegex(fline, r"^F load_entry\(.+\) -> dict @L\d+-\d+ \^[0-9a-f]{8} ~L2$")
+        self.assertRegex(fline, r"^F load_entry\(.+\) -> dict @L\d+-\d+ \^[0-9a-f]{16} ~L2$")
 
     def test_tier_l1_has_no_flow(self):
         il = emit("L1")
@@ -131,6 +131,15 @@ class TestEmitter(unittest.TestCase):
         il3_dup = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L3")
         self.assertEqual(il3, il3_dup)
 
+    def test_call_fidelity_is_not_truncated_after_twenty_five_names(self):
+        calls = "\n".join(f"    call_{index}()" for index in range(40))
+        source = f"def many_calls():\n{calls}\n"
+        module = kern_compile.parse_python(source)
+        il = kern_compile.emit_il(module, "src/x.py", "a" * 64, "none", "L1")
+        for index in range(40):
+            self.assertIn(f"call_{index}", il)
+        self.assertNotIn("…+", il)
+
     def test_l3_omits_calls_already_in_flow(self):
         mod = kern_compile.parse_python(SAMPLE)
         il3 = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L3")
@@ -157,6 +166,35 @@ class TestEmitter(unittest.TestCase):
             self.assertNotIn("hunter2", il)
             self.assertNotIn("abc123shortkey", il)
             self.assertIn("password", il)
+
+    def test_secret_kwargs_and_decorator_arguments_redacted_structurally(self):
+        src = (
+            "@auth('decorator-secret', token='keyword-secret')\n"
+            "def connect():\n"
+            "    login(password='call-secret', role='a  b')\n"
+            "    set_token('positional-secret')\n"
+            "    return 'two  spaces'\n"
+        )
+        for tier in ("L1", "L2", "L3"):
+            il = kern_compile.emit_il(
+                kern_compile.parse_python(src), "src/x.py", "a" * 64, "none", tier
+            )
+            for secret in ("decorator-secret", "keyword-secret", "call-secret", "positional-secret"):
+                self.assertNotIn(secret, il)
+            self.assertIn("<REDACTED", il)
+        il3 = kern_compile.emit_il(
+            kern_compile.parse_python(src), "src/x.py", "a" * 64, "none", "L3"
+        )
+        self.assertIn("role='a  b'", il3)
+        self.assertIn("RET 'two  spaces'", il3)
+
+    def test_semantic_handle_is_emitted_instead_of_bare_slice(self):
+        mod = kern_compile.parse_python(SAMPLE)
+        source_slice = next(s for s in mod.symbols if s.name == "load_entry").slice8
+        il = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L2")
+        symbol = next(s for s in mod.symbols if s.name == "load_entry")
+        self.assertNotEqual(symbol.semantic8, source_slice)
+        self.assertIn("^" + symbol.semantic8, il)
 
     def test_annotation_only_const_has_no_fabricated_value(self):
         src = "count: int\nNAME = 'x'\n\n\ndef f():\n    return count\n"

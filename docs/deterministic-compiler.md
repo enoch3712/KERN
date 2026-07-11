@@ -1,12 +1,12 @@
-# Deterministic compiler walkthrough (KERN-IL/0.2 proposal)
+# Deterministic compiler walkthrough (KERN-IL/0.2)
 
-This document walks one real file through every stage of the proposed deterministic
+This document walks one example file through every stage of the implemented deterministic
 compiler, showing the artifact **before and after** each step. No model is involved
-at any stage: the same source bytes always produce the same IL bytes.
+in baseline lowering. Identical source path and bytes, tier, and compiler/parser
+fingerprint produce identical IL.
 
-Status: design proposal. The Python frontend upgrades the existing
-`python-ast-baseline` in `skills/kern/scripts/kern_cache.py`; other languages move
-from the regex line-filter fallback to tree-sitter.
+Status: implemented for Python and the current JavaScript/TypeScript frontend.
+Other recognized formats retain the labeled generic baseline.
 
 ---
 
@@ -70,8 +70,9 @@ The file goes through a real parser, never a regex.
 
 | Language | Parser | Dependency |
 |---|---|---|
-| Python | `ast` (standard library) | none — already used today |
-| TypeScript, JavaScript, Go, Rust, Java, … | tree-sitter grammar | `pip install tree-sitter tree-sitter-<lang>` |
+| Python | `ast` (standard library) | Python 3.10+ |
+| JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`) and TypeScript (`.ts`, `.tsx`) | current tree-sitter frontend | pinned set in `requirements-compiler.txt` |
+| Go, Rust, Java, C#, and other recognized formats | generic line baseline | none |
 | Parser unavailable or syntax error | current generic line baseline | none (fallback, clearly labeled) |
 
 **Before:** raw text.
@@ -95,7 +96,9 @@ from: the tree is a fact about the bytes, not an interpretation of them.
 ## Step 2 — extract: tree → symbol model
 
 A mechanical walk collects, per symbol: qualified name, signature, span, calls,
-control-flow operations, raise sites, and a hash of the symbol's exact source slice.
+control-flow operations, raise sites, and an exact line-slice digest. A second
+deterministic pass combines that digest with stable same-module semantic context
+to produce the emitted source-map handle.
 
 **Before:** syntax tree.
 **After:** one record per symbol (internal form, never stored):
@@ -107,6 +110,7 @@ control-flow operations, raise sites, and a hash of the symbol's exact source sl
   "signature": "(path: Path, expected_sha: str) -> dict",
   "span": [18, 24],
   "slice_sha256": "a4f1c2e9…",
+  "semantic_handle": "a4f1c2e9d0b7a631",
   "calls": ["path.read_bytes", "sha256().hexdigest", "json.loads"],
   "flow": [
     {"op": "CALL", "expr": "path.read_bytes()", "binds": "data"},
@@ -120,7 +124,9 @@ control-flow operations, raise sites, and a hash of the symbol's exact source sl
 ```
 
 `slice_sha256` is the sha256 of source lines 18–24 exactly as they appear on disk.
-It becomes the symbol's source-map handle (step 5).
+It stays internal. The emitted semantic handle also covers imports, constants,
+decorators, classes, and other same-module symbol facts, so stale contextual facts
+invalidate the handle even when the target function's own lines did not change.
 
 ---
 
@@ -166,7 +172,7 @@ state things the raw text never states in one place.
 
 One shared emitter renders all languages. Two comparisons follow.
 
-### Today's output (`kern-il/0.1`, python-ast-baseline) — real output, ~531 tokens
+### Historical output (`kern-il/0.1`, python-ast-baseline)
 
 ```text
 KERN-IL/0.1
@@ -201,55 +207,61 @@ Problems: the `CALLS` line duplicates the flow lines below it; every statement
 carries its own line number; no effects; no exception propagation; no per-symbol
 hash; the omissions block is fixed boilerplate.
 
-### Proposed output (`kern-il/0.2`) — ~341 tokens
+### KERN-IL/0.2 output (abridged L3 shape)
 
 ```text
 KERN-IL/0.2
 source_rel=src/cache_loader.py
 source_sha256=412e261066069477
-repo_revision=d7e8242
-generator=kern-det/0.2 lang=python frontend=pyast
+repo_revision=none
+generator=kern-det/0.2 lang=python frontend=pyast tier=L3
 
 IMPORTS json, re, hashlib.sha256, pathlib.Path @L3-8
 C MANIFEST_NAME='manifest.json' @L10
 C ENTRY_PATTERN=re.compile(r'^[a-z0-9_/]+\.kern-il\.txt$') @L11 !FAULT(regex)
 
-CLASS StaleSource(Exception) @L14-15 ^b8e2d1a4
+CLASS StaleSource(Exception) @L14-15 ^b8e2d1a4c56f7890
 
-F load_entry(path: Path, expected_sha: str) -> dict @L18-24 ^a4f1c2e9
-  CALL path.read_bytes() -> data
-  CALL sha256(data).hexdigest() -> current_sha
-  IF current_sha != expected_sha: RAISE StaleSource(path)
-  RET json.loads(data)
+F load_entry(path: Path, expected_sha: str) -> dict @L18-24 ^a4f1c2e9d0b7a631 ~L3
   EFFECTS fs:read
   RAISES StaleSource
+    CALL path.read_bytes() -> data
+    CALL sha256(data).hexdigest() -> current_sha
+    IF current_sha != expected_sha
+      RAISE StaleSource(path)
+    RET json.loads(data)
 
-F find_entries(root: Path) -> list[Path] @L27-37 ^c91d33f2
-  CALL load_entry(root/MANIFEST_NAME, read_expected(root)) -> manifest
-  LOOP (name, record) in manifest['files'].items()
-    IF not ENTRY_PATTERN.match(name): CONTINUE
-    IF (root/'ir'/name).is_file(): CALL entries.append(...)
-  RET entries
+F find_entries(root: Path) -> list[Path] @L27-37 ^c91d33f2e401a857 ~L3
   EFFECTS fs:read (via load_entry, read_expected, is_file)
   RAISES StaleSource, ValueError (via load_entry, read_expected)
+    CALL load_entry(root/MANIFEST_NAME, read_expected(root)) -> manifest
+    LOOP (name, record) in manifest['files'].items()
+      IF not ENTRY_PATTERN.match(name)
+        CONTINUE
+      IF (root/'ir'/name).is_file()
+        CALL entries.append(...)
+    RET entries
 
-F read_expected(root: Path) -> str @L40-45 ^7d02ee18
-  CALL (root/'.pin').read_text().strip() -> pin
-  IF len(pin) != 64: RAISE ValueError
-  RET pin
+F read_expected(root: Path) -> str @L40-45 ^7d02ee189ab4c650 ~L3
   EFFECTS fs:read
   RAISES ValueError
+    CALL (root/'.pin').read_text().strip() -> pin
+    IF len(pin) != 64
+      RAISE ValueError
+    RET pin
 
-OMIT docstrings=4 comments=0 blank=9; bodies verbatim-compressed
-FAULT-BEFORE edit(any), regex(L11), exact-literals
+OMIT assignments=4 blank=9 comments=0 docstrings=4 bodies-tier=L3
+FAULT-BEFORE edit(any), exact-literals, regex(L11)
 ```
 
 What changed and why:
 
 - **`-> var` dataflow form.** `CALL path.read_bytes() -> data` replaces
   `SET data=path.read_bytes()` plus the redundant `CALLS` list.
-- **Per-symbol `^hash`.** sha256 prefix of the symbol's exact source slice — the
-  source-map handle.
+- **Per-symbol `^handle`.** A collision-resistant SHA-256 prefix combines the
+  exact symbol slice digest with stable, position-independent same-module semantic
+  context. Callee or decorator changes invalidate dependent handles, while a
+  comment-only move can retain the handle and be reported as `moved`.
 - **`EFFECTS` / `RAISES`.** Computed in step 3, including propagated facts.
 - **`!FAULT(reason)` risk tags.** The compiler stamps lines whose IL rendering is
   known-lossy or high-stakes: regex literals, float/bit math, concurrency
@@ -265,8 +277,8 @@ What changed and why:
 Every symbol line is addressable as:
 
 ```text
-repo_revision : source_sha256 : symbol_path : span
-d7e8242       : 412e2610…     : load_entry  : L18-24   (slice ^a4f1c2e9)
+source_rel          : source_sha256 : symbol_path : span
+src/cache_loader.py : 412e2610…     : load_entry  : L18-24   (^a4f1c2e9d0b7a631)
 ```
 
 The failure this closes: an agent read the IL (or its image render) earlier, the
@@ -276,18 +288,19 @@ raises no signal. The defense is a program, not agent discipline:
 
 ```bash
 python3 kern_cache.py --repo . verify src/cache_loader.py \
-  --symbol load_entry --hash a4f1c2e9
+  --symbol load_entry --hash a4f1c2e9d0b7a631
 ```
 
 | Result | Meaning | Required action |
 |---|---|---|
 | `ok` | Symbol bytes unchanged, same span | proceed |
 | `moved` | Same bytes, new span (file shifted) | use returned span |
-| `stale` | Symbol bytes changed | fault exact source; IL page invalid |
+| `stale` | Symbol bytes or same-file semantic context changed | fault exact source; IL page invalid |
 
 The skill contract makes `verify` mandatory on the edit path: no write to a symbol
 that was read from IL or an image without a passing `verify` (or a fresh `fault`)
-for that symbol's handle.
+for that symbol's handle. `ok` and `moved` exit 0; `stale` returns `ok: false`
+and exits 1.
 
 ---
 
@@ -300,68 +313,33 @@ page on first contact, exactly as the existing codec-invalidation path already d
 
 ---
 
-## Measured token counts
+## Token accounting
 
-### Small file (this walkthrough's 45-line example)
+### Small files
 
-Approximate tokens (chars/4), measured on the artifacts above:
+The walkthrough output is illustrative, not a generated benchmark record. Small,
+dense files can break even or expand after headers and source handles are added.
+The runtime therefore skips full IL below its configured size floor and points the
+agent to exact source instead.
 
-| Artifact | Tokens | vs. source |
-|---|---:|---:|
-| Source (45 lines, dense, few comments) | ~343 | 1.00× |
-| Current 0.1 baseline | ~531 | **1.55× larger** |
-| Proposed 0.2 | ~341 | 1.00× — break-even |
+### Published deterministic corpus
 
-On a **small, dense** file the current baseline *expands* the source, and 0.2 only
-breaks even — while adding effects, propagated exceptions, and per-symbol hashes.
-The skill should skip IL for files below a size floor where source is already the
-cheaper representation.
+The checked-in deterministic result is
+[`benchmarks/results/python-det-v2.json`](../benchmarks/results/python-det-v2.json).
+It currently covers one redistributable Python file. Its size bucket and observed
+L1/L2/L3 ratios are generated fields in the record, using the documented `chars/4`
+estimator. Python 3.13 is the canonical artifact runtime; other supported Python
+versions run the behavior suite but may render stdlib AST text differently. The
+benchmark also checks each tier's signatures, return data, calls,
+effects, raises, unknown-call
+counts, tier markers, and function/class source handles against facts independently
+extracted from the source AST.
 
-### Large file (3,704-line production Python file, ~47,000 tokens)
-
-Run against a real 3,704-line document-processing module — the same size class as
-the pilot file. Deterministic AST extraction was emitted at four detail tiers:
-
-| Tier | Contents per function | Tokens | Compression |
-|---|---|---:|---:|
-| L0 | Signatures, classes, constants, imports only | 1,891 | **24.9×** |
-| L1 | L0 + deduplicated calls + raises | 4,567 | **10.3×** |
-| L2 | L1 + control-flow skeleton (IF/LOOP/TRY/RET, no expressions) | 7,273 | **6.5×** |
-| L3 | L2 + full expressions on every flow line | 10,095 | **4.7×** |
-| — | Current 0.1 baseline (statement dump) on same file | 28,673 | 1.6× |
-
-Two conclusions:
-
-1. **Deterministic extraction reaches pilot-grade compression.** L2 (6.5×) matches
-   the model-enriched pilot result (6.33×) with zero model tokens and full
-   determinism. The current 0.1 baseline's weakness is not the AST approach — it
-   is the verbose per-statement dump (`CALLS` duplication, `SET` lines carrying
-   whole expressions, per-statement line numbers).
-2. **Detail must be tiered per symbol.** The gap between L1 (10.3×) and L3 (4.7×)
-   is the cost of statement bodies. The 0.2 emitter should map tiers onto KERN's
-   existing temperature model: cold symbols get L1, warm symbols get L2/L3, hot
-   symbols get exact source. A tier marker on each function line
-   (e.g. `F name(...) ... ~L1`) declares what was omitted and makes a deeper
-   fault explicit and cheap.
-
-Redaction verified on the same run: a hardcoded `s2_…` API key present in the
-source appears nowhere in the IL (6 `<REDACTED …>` markers emitted).
-
-### Shipped emitter, measured on the same file
-
-The table above is the design-phase prototype. The shipped `kern-det/0.2`
-emitter keeps more facts per page (`CALLS` names at L1/L2, per-symbol slice
-hashes, `EFFECTS` provenance) and emits, at L2, only risk-tagged `CALL` flow
-lines — a bare `CALL` carries no name, so structure-only tiers skip it:
-
-| Tier | Tokens | Compression |
-|---|---:|---:|
-| L1 | 5,451 | **8.6×** |
-| L2 | 8,130 | **5.8×** |
-| L3 | 25,817 | 1.8× |
-
-L3 is larger than the prototype because it preserves full `CALL expr -> var`
-dataflow with real expressions instead of truncating them.
+This is useful implementation evidence, not a universal compression rate. The current
+generated record classifies its redistributable Python input in the large bucket; the
+record itself is authoritative for the observed ratios. New results should publish the
+observed ratio for every represented size/language bucket, retain failures rather than
+lowering a threshold, and keep exact source as the hot path.
 
 ### On micro-compressing keywords
 
@@ -376,21 +354,23 @@ mostly a false economy and is out of scope for 0.2:
 - A per-page dictionary is a new latent-fault source — a misremembered mapping is
   exactly the "confidently wrong" failure this design exists to prevent.
 
-Tiering is the honest lever: L3→L2 alone saves 28% with no decode risk.
+Tiering remains the honest compression lever: compare observed L1/L2/L3 costs in
+the generated benchmark record instead of assuming a fixed savings percentage.
 
 ---
 
 ## Verification plan
 
-1. **Determinism:** compile every corpus file twice; outputs must be byte-identical.
+1. **Determinism:** under the same compiler fingerprint and runtime, compile every
+   corpus file twice; outputs must be byte-identical.
 2. **Golden files:** fixture source → expected IL, per language, in CI.
-3. **Fact fidelity:** for each corpus file, extract signatures, raise sites, and
-   call names independently from the AST and assert the IL contains each one —
-   machine-checked, replacing the pilot's manual five-fact retrieval check.
+3. **Fact fidelity:** for each corpus file and tier, independently extract signatures,
+   return data, calls, effects, raises, unknown-call counts, tier markers, and source
+   handles from the AST and assert that the IL retains every promised fact.
 4. **Token benchmarks:** count source vs. IL tokens (Anthropic count-tokens API
    when available, offline estimator otherwise) across a corpus bucketed by file
    size; publish per-language results under `benchmarks/results/`.
-5. **Fallback:** corpus runs with tree-sitter absent and with syntax-broken files
+5. **Fallback:** corpus runs with the pinned tree-sitter set absent and with syntax-broken files
    must degrade to the labeled generic baseline, never crash.
 
 ---
@@ -407,7 +387,7 @@ gaps as a post-pass over the same tree-sitter tree: no new parser, no new format
 pipeline, so spans, slice hashes, tiers, faults, verify, cache, and redaction are
 inherited verbatim.
 
-### Dialect routing
+### Grammar routing
 
 | suffix | grammar |
 | --- | --- |
@@ -415,11 +395,15 @@ inherited verbatim.
 | `.ts` | `tree_sitter_typescript.language_typescript()` |
 | `.tsx` | `tree_sitter_typescript.language_tsx()` |
 
-`parse_tsjs(text, dialect: str)` takes `"js" | "ts" | "tsx"` instead of a
-`typescript: bool`. Both call sites (`kern_cache.py` compile and verify paths)
-use it. The `generator=` header line reports `lang=tsx frontend=tree-sitter+react`
-when the adapter fires, and plain `frontend=tree-sitter` otherwise — a strict no-op
-on non-component code, verified by `TestNoOpOnPlainCode` in `tests/test_react.py`.
+`parse_tsjs(text, typescript: bool = False, tsx: bool = False)` selects the
+grammar (`tsx=True` wins over `typescript=True`), and `tsjs_available()` takes
+the same flags for per-grammar capability probes. Both call sites
+(`kern_cache.py` compile and verify paths) route this way. The React adapter
+runs only on the JSX-capable grammars (JavaScript and TSX; plain TypeScript has
+no JSX productions). The `generator=` header line reports
+`lang=typescript frontend=tree-sitter+react` for a `.tsx` module when the
+adapter fires, and plain `frontend=tree-sitter` otherwise — a strict no-op on
+non-component code, verified by `TestNoOpOnPlainCode` in `tests/test_react.py`.
 
 A symbol is upgraded to `kind="component"` when it is a function declaration,
 function expression, or arrow function, its name matches `^[A-Z]`, and a

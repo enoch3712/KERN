@@ -542,7 +542,8 @@ def _hook_call_op(op) -> bool:
 
 
 def component_lines(s, level, tier, faults):
-    lines = [f"COMPONENT {s.name}({s.signature}) @L{s.span[0]}-{s.span[1]} ^{s.slice8} ~{tier}"]
+    handle = s.semantic8 or s.slice8
+    lines = [f"COMPONENT {s.name}({s.signature}) @L{s.span[0]}-{s.span[1]} ^{handle} ~{tier}"]
     if level == 1:
         return lines
     r = s.react
