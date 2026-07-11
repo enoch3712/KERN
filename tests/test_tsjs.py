@@ -67,6 +67,14 @@ class TestTsFrontend(unittest.TestCase):
         self.assertTrue(il.startswith("KERN-IL/0.2"))
         self.assertIn("F parse", il)
 
+    def test_broken_source_sets_parse_error(self):
+        broken = "export function f( {\n  return 1;\n}\n"
+        mod = kern_compile.parse_tsjs(broken, typescript=True)
+        self.assertNotEqual(mod.parse_error, "")
+
+    def test_clean_source_has_no_parse_error(self):
+        self.assertEqual(self.mod.parse_error, "")
+
 
 if __name__ == "__main__":
     unittest.main()

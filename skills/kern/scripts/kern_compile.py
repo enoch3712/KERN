@@ -600,7 +600,23 @@ def parse_tsjs(text: str, typescript: bool = False) -> ModuleIR:
         "blank": sum(1 for l in lines if not l.strip()),
         "assignments": 0,
     }
-    return ModuleIR(lang_name, "tree-sitter", symbols, omit)
+
+    parse_error = ""
+    if tree.root_node.has_error:
+        def first_error_line(n):
+            if n.type == "ERROR" or n.is_missing:
+                return n.start_point[0] + 1
+            for c in n.children:
+                found = first_error_line(c)
+                if found is not None:
+                    return found
+            return None
+        line = first_error_line(tree.root_node)
+        if line is None:
+            line = 1
+        parse_error = f"tree-sitter reported syntax errors (first at L{line})"
+
+    return ModuleIR(lang_name, "tree-sitter", symbols, omit, parse_error=parse_error)
 
 
 def emit_il(module: ModuleIR, source_rel: str, source_sha256: str,
