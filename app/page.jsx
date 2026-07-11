@@ -443,33 +443,49 @@ export default function Home() {
 
         <section className="history section-pad" id="history">
           <SectionHead
-            eyebrow="ANOTHER ABSTRACTION LAYER"
-            title="Software has solved this shape before."
-            body="Each step separated the form humans work in from the form machines consume. KERN applies that old trick to model attention."
+            eyebrow="THE FULL CIRCLE"
+            title="We taught machines to read code. Then we forgot."
+            body="Each generation separated human expression from machine consumption—until the raw-prompt era convinced us to paste large codebases into a model window. KERN puts the compiler boundary back where it belongs."
           />
-          <div className="history-line">
-            <article>
-              <span className="history-era">01</span>
-              <div className="history-symbol punch-card" aria-hidden="true">{Array.from({ length: 20 }).map((_, index) => <i key={index} />)}</div>
-              <h3>Punch cards</h3><p>Programs matched the machine format.</p>
+          <div className="history-rail">
+            <article className="history-card">
+              <span className="history-year">1950s</span>
+              <div className="history-icon"><div className="punch-card" aria-hidden="true">{Array.from({ length: 15 }).map((_, index) => <i key={index} />)}</div></div>
+              <h3>Punch cards</h3>
+              <strong>Humans speak machine.</strong>
+              <p>Every instruction explicit, physical, and expensive.</p>
             </article>
-            <Arrow />
-            <article>
-              <span className="history-era">02</span>
-              <div className="history-symbol compile-symbol" aria-hidden="true"><code>src</code><Arrow /><code>bin</code></div>
-              <h3>Compilers</h3><p>Source stopped matching hardware instructions.</p>
+            <article className="history-card">
+              <span className="history-year">1957–1985</span>
+              <div className="history-icon history-cpp"><img src={asset("/logos/cplusplus.svg")} alt="C++" /></div>
+              <h3>Compilers</h3>
+              <strong>Humans write source.</strong>
+              <p>Translation separates how software reads from how it runs.</p>
             </article>
-            <Arrow />
-            <article>
-              <span className="history-era">03</span>
-              <div className="history-symbol vm-symbol" aria-hidden="true"><span>JVM</span><span>CLR</span></div>
-              <h3>VMs + IL</h3><p>Bytecode stopped matching one execution platform.</p>
+            <article className="history-card">
+              <span className="history-year">1995–2002</span>
+              <div className="history-icon history-vm-marks" aria-label="JVM and .NET CLR"><span>JVM</span><span>CLR</span></div>
+              <h3>VMs + IL</h3>
+              <strong>Compile once. Optimize later.</strong>
+              <p>Portable bytecode, JIT compilation, runtime specialization.</p>
             </article>
-            <Arrow />
-            <article className="history-kern">
-              <span className="history-era">04</span>
-              <div className="history-symbol"><Brand /></div>
-              <h3>KERN IL</h3><p>Repository meaning stops matching one model window.</p>
+            <article className="history-card">
+              <span className="history-year">2020–2025</span>
+              <div className="history-icon history-model-marks" aria-label="Coding model environments">
+                <span><img src={asset("/logos/claude.svg")} alt="Claude" /></span>
+                <span className="light"><img src={asset("/logos/openai.svg")} alt="OpenAI" /></span>
+                <span><img src={asset("/logos/cursor.svg")} alt="Cursor" /></span>
+              </div>
+              <h3>Raw prompts</h3>
+              <strong>Paste the repo into chat.</strong>
+              <p>Our smartest models reread every import, brace, and comment.</p>
+            </article>
+            <article className="history-card history-card-kern">
+              <span className="history-year">2026</span>
+              <div className="history-icon"><Brand /></div>
+              <h3>KERN IL</h3>
+              <strong>Compile context again.</strong>
+              <p>Reason over compact IL. Fault exact source only on demand.</p>
             </article>
           </div>
           <p className="history-caption">Once again, software goes full-circle—by adding another layer in the middle.</p>
