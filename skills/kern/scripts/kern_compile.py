@@ -500,9 +500,13 @@ _TS_FLOW = {
 _TS_FUNC_NODES = {"function_declaration", "generator_function_declaration", "method_definition"}
 
 
-def parse_tsjs(text: str, typescript: bool = False) -> ModuleIR:
+def parse_tsjs(text: str, dialect: str = "js") -> ModuleIR:
     from tree_sitter import Language, Parser
-    if typescript:
+    if dialect == "tsx":
+        import tree_sitter_typescript as ts_lang
+        language = Language(ts_lang.language_tsx())
+        lang_name = "tsx"
+    elif dialect == "ts":
         import tree_sitter_typescript as ts_lang
         language = Language(ts_lang.language_typescript())
         lang_name = "typescript"

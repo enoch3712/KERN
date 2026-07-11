@@ -22,6 +22,16 @@ SCHEMA = "kern-cache/0.1"
 CODEC_VERSION = "kern-il/0.2"
 BASELINE_GENERATOR = "kern-det/0.2"
 TSJS_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
+
+
+def tsjs_dialect(suffix: str) -> str:
+    if suffix == ".tsx":
+        return "tsx"
+    if suffix == ".ts":
+        return "ts"
+    return "js"
+
+
 CACHE_DIRNAME = ".kern"
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema": SCHEMA,
@@ -462,7 +472,7 @@ def baseline_for(root: Path, source: Path, relative: str, digest: str,
         if suffix == ".py":
             module = kern_compile.parse_python(text)
         elif suffix in TSJS_SUFFIXES and kern_compile.tsjs_available():
-            module = kern_compile.parse_tsjs(text, typescript=suffix in {".ts", ".tsx"})
+            module = kern_compile.parse_tsjs(text, dialect=tsjs_dialect(suffix))
         if module is not None:
             if module.parse_error:
                 note = f"parse failed: {module.parse_error}"
@@ -828,7 +838,7 @@ def verify_symbol(root: Path, paths: dict[str, Path], relative: str, source: Pat
     if suffix == ".py":
         module = kern_compile.parse_python(text)
     elif suffix in TSJS_SUFFIXES and kern_compile.tsjs_available():
-        module = kern_compile.parse_tsjs(text, typescript=suffix in {".ts", ".tsx"})
+        module = kern_compile.parse_tsjs(text, dialect=tsjs_dialect(suffix))
     else:
         raise ValueError(f"verify does not support {suffix or 'this file type'}; use fault with --expect-sha")
     if module.parse_error:

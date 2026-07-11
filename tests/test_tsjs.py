@@ -34,7 +34,7 @@ class TestAvailability(unittest.TestCase):
 @unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
 class TestTsFrontend(unittest.TestCase):
     def setUp(self):
-        self.mod = kern_compile.parse_tsjs(TS_SAMPLE, typescript=True)
+        self.mod = kern_compile.parse_tsjs(TS_SAMPLE, dialect="ts")
 
     def sym(self, name):
         return next(s for s in self.mod.symbols if s.name == name)
@@ -69,7 +69,7 @@ class TestTsFrontend(unittest.TestCase):
 
     def test_broken_source_sets_parse_error(self):
         broken = "export function f( {\n  return 1;\n}\n"
-        mod = kern_compile.parse_tsjs(broken, typescript=True)
+        mod = kern_compile.parse_tsjs(broken, dialect="ts")
         self.assertNotEqual(mod.parse_error, "")
 
     def test_clean_source_has_no_parse_error(self):
