@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 # Safe: kern_compile imports kern_react only lazily inside functions, so there
 # is no cycle at module-exec time.
@@ -15,6 +15,18 @@ HOOK_RE = re.compile(r"^use[A-Z]\w*$")
 COMPONENT_NAME_RE = re.compile(r"^[A-Z]")
 FN_TYPES = {"arrow_function", "function_expression", "function_declaration",
             "generator_function_declaration", "method_definition"}
+_STR_ASSIGN = re.compile(
+    r"(\w+)(\s*=\s*)(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`[^`]*`)")
+
+
+def _scrub_named_secrets(text: str) -> str:
+    """Redact string literals assigned to secret-named identifiers or JSX
+    attributes inside already-rendered text (signatures, flow-op details)."""
+    def sub(m):
+        if SECRET_NAME.search(m.group(1)):
+            return m.group(1) + m.group(2) + sanitize_string(m.group(3), secret_hint=True)
+        return m.group(0)
+    return _STR_ASSIGN.sub(sub, text)
 
 
 @dataclass
@@ -112,7 +124,11 @@ def _extract_props(fn_node, ntext) -> list:
             elif p.type == "object_assignment_pattern":
                 left = p.child_by_field_name("left")
                 right = p.child_by_field_name("right")
-                out.append(f"{ntext(left, 60)}={ntext(right, 60)}")
+                left_txt = ntext(left, 60)
+                right_txt = ntext(right, 60)
+                if SECRET_NAME.search(left_txt):
+                    right_txt = sanitize_string(right_txt, secret_hint=True)
+                out.append(f"{left_txt}={right_txt}")
             elif p.type == "pair_pattern":
                 out.append(ntext(p, 60))
             elif p.type == "rest_pattern":
@@ -155,21 +171,28 @@ def _extract_hooks(body, react, ntext, flow_fn):
                 if risk:
                     faults.append((risk, line))
                 name_txt = ntext(name_node, 60)
+
+                def bound(value_txt, name=None):
+                    # Name-hinted secret: redact the value bound to it.
+                    if SECRET_NAME.search(name if name is not None else name_txt):
+                        return sanitize_string(value_txt, secret_hint=True)
+                    return value_txt
+
                 if tail == "useState" and name_node.type == "array_pattern":
                     elems = [ntext(e, 40) for e in name_node.named_children]
                     state = elems[0] if elems else "?"
                     init = ntext(args[0], 80) if args else "undefined"
                     if len(elems) > 1:
                         setters[elems[1]] = state
-                    hooks.append(HookUse("STATE", f"{state}={init}", line, risk))
+                    hooks.append(HookUse("STATE", f"{state}={bound(init, state)}", line, risk))
                 elif tail == "useReducer":
-                    hooks.append(HookUse("STATE", f"{name_txt}={ntext(value, 120)}", line, risk))
+                    hooks.append(HookUse("STATE", f"{name_txt}={bound(ntext(value, 120))}", line, risk))
                 elif tail == "useContext":
-                    hooks.append(HookUse("CTX", f"{name_txt}={ntext(value, 80)}", line, risk))
+                    hooks.append(HookUse("CTX", f"{name_txt}={bound(ntext(value, 80))}", line, risk))
                 elif tail == "useRef":
                     hooks.append(HookUse("REF", name_txt, line, risk))
                 else:
-                    hooks.append(HookUse("HOOK", f"{name_txt}={ntext(value, 120)}", line, risk))
+                    hooks.append(HookUse("HOOK", f"{name_txt}={bound(ntext(value, 120))}", line, risk))
         elif stmt.type == "expression_statement" and stmt.named_children:
             value = stmt.named_children[0]
             if value.type in COND_EXPR_TYPES:
@@ -249,7 +272,10 @@ def _jsx_attrs(el, ntext):
                 events.append((aname, value))
                 continue
             named += 1
-            parts.append(ntext(a, 60))
+            if SECRET_NAME.search(aname) and value is not None:
+                parts.append(f"{aname}={sanitize_string(ntext(value, 60), secret_hint=True)}")
+            else:
+                parts.append(ntext(a, 60))
         elif a.type == "jsx_expression":  # {...spread}
             spread += 1
             parts.append(ntext(a, 40).strip("{}"))
@@ -540,7 +566,8 @@ def component_lines(s, level, tier, faults):
     if effects:
         lines.append("  EFFECTS " + effects)
     if level >= 3 and s.flow:
-        body_ops = [op for op in s.flow if not _hook_call_op(op)]
+        body_ops = [replace(op, detail=_scrub_named_secrets(op.detail))
+                    for op in s.flow if not _hook_call_op(op)]
         lines.extend(flow_lines(s, level, tier, faults, ops=body_ops))
     for risk, line in r.get("faults", []):
         lines.append(f"  !FAULT({risk}) @L{line}")
@@ -558,6 +585,9 @@ def lower_components(fn_nodes, ntext, flow_fn) -> bool:
         if not COMPONENT_NAME_RE.match(short) or not _returns_jsx(node):
             continue
         sym.kind = "component"
+        # The head line renders the raw signature text; name-hinted string
+        # defaults (apiToken = "…") must not leak through it.
+        sym.signature = _scrub_named_secrets(sym.signature)
         sym.react = {
             "wrapper": sym.decorators[0] if sym.decorators else "",
             "props": _extract_props(node, ntext),

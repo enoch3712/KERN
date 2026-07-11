@@ -461,6 +461,39 @@ class TestEmit(unittest.TestCase):
 
 
 @unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+class TestRedaction(unittest.TestCase):
+    def _il(self, src):
+        mod = kern_compile.parse_tsjs(src, dialect="tsx")
+        return kern_compile.emit_il(mod, "app/T.tsx", "b" * 64, "none", "L3")
+
+    def test_prop_default_secret_redacted(self):
+        il = self._il('function Login({ apiToken = "hunter2-plain" }) {\n  return <div />;\n}\n')
+        self.assertNotIn("hunter2-plain", il)
+        self.assertIn("REDACTED", il)
+
+    def test_state_secret_redacted(self):
+        il = self._il('function T() {\n  const [password, setPassword] = useState("letmein123");\n  return <div />;\n}\n')
+        self.assertNotIn("letmein123", il)
+
+    def test_jsx_attr_secret_redacted(self):
+        il = self._il('function T() {\n  return <input apiKey="hunter2abc" />;\n}\n')
+        self.assertNotIn("hunter2abc", il)
+
+    def test_custom_hook_bound_secret_redacted(self):
+        il = self._il('function T() {\n  const authToken = useToken("tok-abc-plain");\n  return <div />;\n}\n')
+        self.assertNotIn("tok-abc-plain", il)
+
+    def test_non_secret_names_untouched(self):
+        il = self._il('function T({ label = "hello" }) {\n'
+                      '  const [open, setOpen] = useState("wide");\n'
+                      '  return <input placeholder="type here" />;\n}\n')
+        self.assertIn('label = "hello"', il)      # signature verbatim
+        self.assertIn("open=\"wide\"", il)
+        self.assertIn('placeholder="type here"', il)
+        self.assertNotIn("REDACTED", il)
+
+
+@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
 class TestNoOpOnPlainCode(unittest.TestCase):
     PLAIN = ('import { readFile } from "fs/promises";\n\n'
              "export async function load(url) {\n"
