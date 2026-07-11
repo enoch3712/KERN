@@ -11,7 +11,7 @@ import importlib
 import importlib.metadata
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 CODEC_VERSION = "kern-il/0.2"
 GENERATOR = "kern-det/0.2"
@@ -258,6 +258,8 @@ class Symbol:
     effects: dict = field(default_factory=dict)      # effect -> list of via names ([] = direct)
     raises_all: dict = field(default_factory=dict)   # exception -> list of via names
     unknown_calls: int = 0
+    react: dict = field(default_factory=dict)        # React adapter payload (kern_react)
+    redact_body: bool = False                        # scrub rendered body metadata
 
 
 @dataclass
@@ -482,7 +484,7 @@ def _resolved_local(module: ModuleIR, caller: Symbol, call_name: str,
 
 
 def propagate(module: ModuleIR) -> None:
-    funcs = [s for s in module.symbols if s.kind == "function"]
+    funcs = [s for s in module.symbols if s.kind in ("function", "component")]
     by_name: dict[str, list[Symbol]] = {}
     for s in funcs:
         by_name.setdefault(s.name, []).append(s)
@@ -734,12 +736,14 @@ def _function_lines(s: Symbol, level: int, tier: str, faults: list) -> list:
              f"@L{s.span[0]}-{s.span[1]} ^{handle} ~{tier}"]
     if s.decorators:
         lines.append("  DECORATORS " + ", ".join(s.decorators))
+    display_call = (lambda call: sanitize_string(call, secret_hint=True)
+                    if s.redact_body else call)
     if level <= 2:
         if s.calls:
             # Calls are part of the L1/L2 fidelity contract. If the complete
             # deduplicated set is no longer economical, the file-level size
             # policy should select source instead of silently discarding facts.
-            lines.append("  CALLS " + ", ".join(s.calls))
+            lines.append("  CALLS " + ", ".join(display_call(call) for call in s.calls))
     else:
         covered = "\n".join(op.detail for op in s.flow)
         leftover = [
@@ -747,7 +751,7 @@ def _function_lines(s: Symbol, level: int, tier: str, faults: list) -> list:
             if not re.search(rf"(?<![\w.]){re.escape(c)}\s*\(", covered)
         ]
         if leftover:
-            lines.append("  CALLS " + ", ".join(leftover))
+            lines.append("  CALLS " + ", ".join(display_call(call) for call in leftover))
     effects = _render_provenanced(s.effects, s.unknown_calls)
     if effects:
         lines.append("  EFFECTS " + effects)
@@ -755,26 +759,34 @@ def _function_lines(s: Symbol, level: int, tier: str, faults: list) -> list:
     if raises:
         lines.append("  RAISES " + raises)
     if level >= 2:
-        for op in s.flow:
-            # L2 is structure-only: bare CALL carries no name (CALLS has them),
-            # so only risk-tagged calls earn a line at this tier.
-            if level == 2 and op.op == "CALL" and not op.risk:
-                continue
-            pad = "  " * (op.depth + 2)
-            piece = op.op
-            if level == 3 and op.detail:
-                piece += f" {op.detail}"
-            elif level == 2 and op.op in ("CATCH", "NESTED", "CASE") and op.detail:
-                piece += f" {op.detail}"
-            if level == 3 and op.binds:
-                piece += f" -> {op.binds}"
-            risk = op.risk
-            if not risk and level == 3 and any(m in op.detail for m in _ELIDED):
-                risk = "elided-literal"
-            if risk:
-                piece += f" !FAULT({risk})"
-                faults.append(f"{risk}(L{op.line})")
-            lines.append(pad + piece)
+        lines.extend(flow_lines(s, level, tier, faults))
+    return lines
+
+
+def flow_lines(s: Symbol, level: int, tier: str, faults: list, ops=None) -> list:
+    """Render flow ops at the given tier. `ops` overrides `s.flow` so callers
+    (the React adapter) can pre-filter without copying the symbol."""
+    lines = []
+    for op in (s.flow if ops is None else ops):
+        # L2 is structure-only: bare CALL carries no name (CALLS has them),
+        # so only risk-tagged calls earn a line at this tier.
+        if level == 2 and op.op == "CALL" and not op.risk:
+            continue
+        pad = "  " * (op.depth + 2)
+        piece = op.op
+        if level == 3 and op.detail:
+            piece += f" {op.detail}"
+        elif level == 2 and op.op in ("CATCH", "NESTED", "CASE") and op.detail:
+            piece += f" {op.detail}"
+        if level == 3 and op.binds:
+            piece += f" -> {op.binds}"
+        risk = op.risk
+        if not risk and level == 3 and any(m in op.detail for m in _ELIDED):
+            risk = "elided-literal"
+        if risk:
+            piece += f" !FAULT({risk})"
+            faults.append(f"{risk}(L{op.line})")
+        lines.append(pad + piece)
     return lines
 
 
@@ -899,6 +911,14 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
             for child in node.named_children:
                 add_type_literals(child)
 
+        def unwrap_ts_value(node):
+            while node is not None and node.type in {
+                "parenthesized_expression", "as_expression", "satisfies_expression",
+                "non_null_expression",
+            }:
+                node = node.named_children[0] if node.named_children else None
+            return node
+
         def walk(node):
             node_type = node.type
             if node_type in {"required_parameter", "optional_parameter", "variable_declarator",
@@ -909,16 +929,28 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
                     add(value)
                 elif named_secret(name):
                     add_type_literals(field_node(node, "type"))
-            elif node_type in {"assignment_expression", "augmented_assignment_expression", "assignment_pattern"}:
+            elif node_type in {
+                "assignment_expression", "augmented_assignment_expression",
+                "assignment_pattern", "object_assignment_pattern",
+            }:
                 left = field_node(node, "left")
                 right = field_node(node, "right")
                 if named_secret(left) and right is not None:
                     add(right)
-            elif node_type == "pair":
+            elif node_type in {"pair", "pair_pattern"}:
                 key = field_node(node, "key")
                 value = field_node(node, "value")
                 if named_secret(key) and value is not None:
-                    add(value)
+                    if node_type == "pair_pattern":
+                        if value.type in {"assignment_pattern", "object_assignment_pattern"}:
+                            value = field_node(value, "right")
+                        elif value.type not in {"object_pattern", "array_pattern"}:
+                            # `password: local` aliases a binding but carries no
+                            # value to redact; nested patterns are conservatively
+                            # redacted as a unit when the outer property is secret.
+                            value = None
+                    if value is not None:
+                        add(value)
             elif node_type == "enum_assignment":
                 name = field_node(node, "name")
                 value = field_node(node, "value")
@@ -929,6 +961,28 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
                 type_node = field_node(node, "type")
                 if named_secret(name) and type_node is not None:
                     add_type_literals(type_node)
+            elif node_type == "jsx_attribute":
+                name = field_node(node, "name")
+                value = field_node(node, "value")
+                if name is None and node.named_children:
+                    name = node.named_children[0]
+                if value is None and len(node.named_children) > 1:
+                    value = node.named_children[1]
+                if named_secret(name) and value is not None:
+                    add(value)
+            elif node_type in {
+                "method_definition", "method_signature", "abstract_method_signature",
+            }:
+                name = field_node(node, "name")
+                if named_secret(name):
+                    # The method name is useful structure, but a secret-named
+                    # method's defaults, generic/return types, and body are all
+                    # secret-bearing value positions.
+                    for child in node.named_children:
+                        if (name is None
+                                or child.start_byte != name.start_byte
+                                or child.end_byte != name.end_byte):
+                            add(child)
             elif node_type in {"call_expression", "new_expression"}:
                 callee = field_node(node, "function") or field_node(node, "constructor")
                 if named_secret(callee):
@@ -936,6 +990,23 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
                     if arguments is not None:
                         for argument in arguments.named_children:
                             add(argument)
+                if callee is not None and callee.type == "member_expression":
+                    prop = field_node(callee, "property")
+                    if prop is not None and raw_text(prop) == "map":
+                        arguments = field_node(node, "arguments")
+                        callback = None
+                        if arguments is not None and arguments.named_children:
+                            candidate = unwrap_ts_value(arguments.named_children[0])
+                            if (candidate is not None
+                                    and candidate.type in {
+                                        "arrow_function", "function_expression",
+                                    }):
+                                callback = candidate
+                        if callback is not None:
+                            params = (field_node(callback, "parameter")
+                                      or field_node(callback, "parameters"))
+                            if named_secret(params):
+                                add(field_node(callee, "object"))
             for child in node.named_children:
                 walk(child)
 
@@ -1109,8 +1180,16 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
                 ops.extend(flow(c, depth, budget - len(ops)))
         return ops[:budget]
 
+    fn_nodes: list = []
+
     def function_symbol(node, qualified, decorators=None):
         decorators = list(decorators or [])
+        method_name = (field_node(node, "name")
+                       if node.type in {
+                           "method_definition", "method_signature",
+                           "abstract_method_signature",
+                       } else None)
+        secret_method = bool(method_name is not None and SECRET_NAME.search(raw_text(method_name)))
         calls, raises, effects = [], [], {}
         body = field_node(node, "body")
         if body is not None:
@@ -1121,6 +1200,8 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
         a, b = span_with_decorators(node, decorators)
         is_async = any(ch.type == "async" for ch in node.children)
         signature = ntext(params, 240) if params is not None else ""
+        if secret_method and params is not None:
+            signature = ntext(params, 240, secret_hint=True)
         if signature.startswith("(") and signature.endswith(")"):
             signature = signature[1:-1]
         if body is None:
@@ -1130,14 +1211,25 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
         else:
             body_flow = [FlowOp("RET", ntext(body, 140), depth=0,
                                 line=body.start_point[0] + 1, risk=ts_risk(body))]
-        return Symbol(
+        if secret_method:
+            body_flow = [replace(
+                op,
+                detail=(sanitize_string(op.detail, secret_hint=True)
+                        if op.detail else ""),
+            ) for op in body_flow]
+            raises = [sanitize_string(item, secret_hint=True) for item in raises]
+        sym = Symbol(
             kind="function", name=qualified, span=(a, b),
             signature=signature,
-            returns=ntext(rtype, 60).lstrip(": ") if rtype is not None else "",
+            returns=(ntext(rtype, 60, secret_hint=secret_method).lstrip(": ")
+                     if rtype is not None else ""),
             slice8=slice_sha8(text, a, b), calls=calls, raises=raises,
             flow=body_flow, is_async=is_async, effects=effects,
             decorators=[ntext(decorator, 100) for decorator in decorators],
+            redact_body=secret_method,
         )
+        fn_nodes.append((sym, node))
+        return sym
 
     symbols: list[Symbol] = []
     unsupported_runtime: list[tuple[str, int]] = []
@@ -1145,11 +1237,27 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
     def add_simple(kind_name, name, node, detail="", decorators=None, bases=""):
         decorators = list(decorators or [])
         a, b = span_with_decorators(node, decorators)
-        symbols.append(Symbol(
+        sym = Symbol(
             kind=kind_name, name=name, detail=detail, bases=bases, span=(a, b),
             slice8=slice_sha8(text, a, b),
             decorators=[ntext(decorator, 100) for decorator in decorators],
-        ))
+        )
+        symbols.append(sym)
+        return sym
+
+    # Wrapper callbacks are only function-like when the React adapter can
+    # prove they render JSX.  Keep the ordinary const symbol as the origin so
+    # probing memo/forwardRef is a no-op for non-components; successful probes
+    # are swapped in after React lowering.
+    wrapper_probes: list[tuple[Symbol, Symbol, object]] = []
+
+    def unwrap_ts_value(value):
+        while value is not None and value.type in {
+            "parenthesized_expression", "as_expression", "satisfies_expression",
+            "non_null_expression",
+        }:
+            value = value.named_children[0] if value.named_children else None
+        return value
 
     def commonjs_assignment(node, prefix) -> bool:
         left = field_node(node, "left")
@@ -1206,8 +1314,32 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
                 name_node = field_node(declaration, "name")
                 value = field_node(declaration, "value")
                 name = prefix + ntext(name_node, 80)
-                if value is not None and value.type in {"arrow_function", "function_expression", "generator_function"}:
+                if value is not None and value.type in {
+                    "arrow_function", "function_expression", "generator_function",
+                }:
                     symbols.append(function_symbol(value, name))
+                    continue
+                probe_value = unwrap_ts_value(value)
+                wrapper, inner = "", None
+                if probe_value is not None and probe_value.type == "call_expression":
+                    callee = field_node(probe_value, "function")
+                    wrapper = ntext(callee, 60) if callee is not None else ""
+                    if wrapper in ("memo", "forwardRef", "React.memo", "React.forwardRef"):
+                        arguments = field_node(probe_value, "arguments")
+                        if arguments is not None and arguments.named_children:
+                            first = unwrap_ts_value(arguments.named_children[0])
+                            if (first is not None
+                                    and first.type in ("arrow_function", "function_expression")):
+                                inner = first
+                if inner is not None:
+                    detail = "=" + ntext(
+                        value, 160, secret_hint=bool(SECRET_NAME.search(name))
+                    )
+                    origin = add_simple("const", name, declaration, detail)
+                    probe = function_symbol(inner, name)
+                    probe.decorators = [wrapper.split(".")[-1]]
+                    owner = node.parent if node.parent.type == "export_statement" else node
+                    wrapper_probes.append((origin, probe, owner))
                 else:
                     detail = "=" + ntext(value, 160, secret_hint=bool(SECRET_NAME.search(name))) if value is not None else ""
                     add_simple("const", name, declaration, detail)
@@ -1292,6 +1424,27 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
 
     visit(tree.root_node)
 
+    frontend = "tree-sitter"
+    if kind in ("javascript", "tsx"):
+        # JSX-capable grammars only: plain typescript has no JSX productions.
+        import kern_react
+        if kern_react.lower_components(fn_nodes, ntext=ntext, flow_fn=flow):
+            frontend = "tree-sitter+react"
+        for origin, probe, declaration in wrapper_probes:
+            if probe.kind != "component":
+                continue
+            # The component is owned by the complete declaration, not merely
+            # its first wrapper argument.  Comparator and other wrapper-arg
+            # edits must therefore change its exact and semantic handles, and
+            # exact-source faults must cover the complete declaration.
+            a, b = span(declaration)
+            probe.span = (a, b)
+            probe.slice8 = slice_sha8(text, a, b)
+            for index, symbol in enumerate(symbols):
+                if symbol is origin:
+                    symbols[index] = probe
+                    break
+
     all_nodes = list(walk_nodes(tree.root_node))
     lines = text.split("\n")
     if lines and lines[-1] == "":
@@ -1322,7 +1475,7 @@ def parse_tsjs(text: str, typescript: bool = False, tsx: bool = False) -> Module
             line = 1
         parse_error = f"tree-sitter reported syntax errors (first at L{line})"
 
-    return ModuleIR(lang_name, "tree-sitter", symbols, omit, parse_error=parse_error)
+    return ModuleIR(lang_name, frontend, symbols, omit, parse_error=parse_error)
 
 
 def emit_il(module: ModuleIR, source_rel: str, source_sha256: str,
@@ -1374,6 +1527,8 @@ def emit_il(module: ModuleIR, source_rel: str, source_sha256: str,
             handle = s.semantic8 or s.slice8
             detail = (" " + s.detail) if s.detail else ""
             out.append(f"{label} {s.name}{detail} @L{s.span[0]}-{s.span[1]} ^{handle}")
+    if any(s.kind == "component" for s in module.symbols):
+        import kern_react
     for s in module.symbols:
         if s.kind == "class":
             handle = s.semantic8 or s.slice8
@@ -1383,6 +1538,9 @@ def emit_il(module: ModuleIR, source_rel: str, source_sha256: str,
         elif s.kind == "function":
             out.append("")
             out.extend(_function_lines(s, level, tier, faults))
+        elif s.kind == "component":
+            out.append("")
+            out.extend(kern_react.component_lines(s, level, tier, faults))
     omit = " ".join(f"{k}={v}" for k, v in sorted(module.omit.items()))
     out.extend([
         "",

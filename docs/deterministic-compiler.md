@@ -372,3 +372,141 @@ the generated benchmark record instead of assuming a fixed savings percentage.
    size; publish per-language results under `benchmarks/results/`.
 5. **Fallback:** corpus runs with the pinned tree-sitter set absent and with syntax-broken files
    must degrade to the labeled generic baseline, never crash.
+
+---
+
+## React frontend (tsx/jsx)
+
+Step 1's grammar table lists `tree-sitter` for TypeScript and JavaScript, but two
+gaps sat under that row: `.tsx` files were routed to the plain TypeScript grammar
+(no JSX support, so JSX-bearing `.tsx` degraded to a parse error), and `.jsx`
+parsed fine but rendered every component as a truncated `FN` — hooks, state,
+effects, events, and render structure were invisible. `kern_react.py` closes both
+gaps as a post-pass over the same tree-sitter tree: no new parser, no new format.
+`COMPONENT` is a symbol kind inside the existing `ModuleIR`/`Symbol`/`emit_il`
+pipeline, so spans, slice hashes, tiers, faults, verify, cache, and redaction are
+inherited verbatim.
+
+### Grammar routing
+
+| suffix | grammar |
+| --- | --- |
+| `.js` `.jsx` `.mjs` `.cjs` | `tree_sitter_javascript` (JSX built in) |
+| `.ts` | `tree_sitter_typescript.language_typescript()` |
+| `.tsx` | `tree_sitter_typescript.language_tsx()` |
+
+`parse_tsjs(text, typescript: bool = False, tsx: bool = False)` selects the
+grammar (`tsx=True` wins over `typescript=True`), and `tsjs_available()` takes
+the same flags for per-grammar capability probes. Both call sites
+(`kern_cache.py` compile and verify paths) route this way. The React adapter
+runs only on the JSX-capable grammars (JavaScript and TSX; plain TypeScript has
+no JSX productions). The `generator=` header line reports
+`lang=typescript frontend=tree-sitter+react` for a `.tsx` module when the
+adapter fires, and plain `frontend=tree-sitter` otherwise — a strict no-op on
+non-component code, verified by `TestNoOpOnPlainCode` in `tests/test_react.py`.
+
+A symbol is upgraded to `kind="component"` when it is a function declaration,
+function expression, or arrow function, its name matches `^[A-Z]`, and a
+`return` (or arrow expression body) contains a `jsx_element`,
+`jsx_self_closing_element`, or `jsx_fragment`. `memo(Fn)` / `forwardRef(Fn)`
+wrappers are unwrapped: the inner function is lowered, the wrapper noted.
+Capitalized functions with no JSX stay plain `FN`; lowercase functions
+returning JSX also stay `FN` (not components by React convention).
+
+### Extraction vocabulary
+
+```text
+COMPONENT UserCard L3-18 #a3f9c2d1
+  PROPS user, onClose?=noop
+  STATE open=false
+  STATE [state, dispatch]=useReducer(reducer, init)
+  CTX theme=useContext(ThemeContext)
+  REF inputRef
+  HOOK data=useUserData(id)
+  EFFECT deps=[user.id]
+  EVENT Card.onClick -> set open=true
+  RENDER
+    Card
+      Avatar src=user.avatar
+      span {user.name}
+      IF open > UserDetails user=user
+      FOR item in items > Row key=item.id
+```
+
+Rules:
+
+- **PROPS** — first parameter. Destructured pattern lists names with defaults
+  (`onClose?=noop` when a default exists; `?` when the TS type marks it optional
+  and that is syntactically visible). Non-destructured param renders as its name
+  (`props`).
+- **STATE** — `const [x, setX] = useState(init)` → `STATE x=init`; setter name
+  recorded internally for EVENT lowering. `useReducer` renders the pair and
+  arguments.
+- **CTX / REF / HOOK** — `useContext`, `useRef`, and custom `use[A-Z]\w*` calls
+  respectively. Custom hooks are opaque: call text only, no cross-file
+  resolution.
+- **EFFECT** — `useEffect` / `useLayoutEffect`. Dependency array rendered
+  verbatim (`deps=[user.id]`, `deps=[]`); a missing array renders
+  `deps=EVERY-RENDER`. Effect body: L2 normally shows the head only but retains
+  risk-bearing operations required by the fault contract; L3 summarizes via
+  existing `flow()`.
+- **EVENT** — JSX attribute matching `on[A-Z]\w+={expr}`. If the handler body is
+  a single known-setter call, lower to `set <state>=<arg>`; otherwise render the
+  callee name or `flow()`-style summary at L3.
+- **RENDER** — JSX tree, indentation = nesting:
+  - `{cond && <X/>}` → `IF cond > X`; ternary → `IF cond > X ELSE > Y`
+  - `.map(` callback returning JSX → `FOR param in receiver > X`
+  - Host elements (lowercase) are structure; text/expression children render as
+    `{expr}` capped by existing `ntext` (secret redaction inherited)
+  - Capitalized JSX names are component dependencies; names that match imports
+    cross-link naturally through the existing import lines
+- Non-hook, non-render statements in the component body flow through the
+  existing L3 flow-op rendering unchanged (hook calls are skipped there —
+  they already surface as STATE/CTX/REF/HOOK/EFFECT heads). Components also
+  emit the same `EFFECTS` provenance line as plain functions (effect classes
+  plus `unknown-calls=N`) at L2 and L3. L2 retains only risk-bearing body ops
+  so their inline markers and `FAULT-BEFORE` entries cannot disappear.
+- All line math is `\n`-only, matching the repo rule (never `str.splitlines()`).
+
+### Tier mapping
+
+| Tier | Component detail |
+| --- | --- |
+| L1 | `COMPONENT name (props) span #hash` — one line, like current FN heads |
+| L2 | + STATE/CTX/REF/HOOK/EFFECT/EVENT heads, risk-bearing body ops, and the `EFFECTS` provenance line; RENDER collapsed to components-only tree (host elements and attributes dropped; IF/FOR structure kept) |
+| L3 | Full render tree with attributes, effect bodies, handler bodies, and non-hook body statements via `flow()` |
+
+### Faulting
+
+Ambiguity never disappears silently. Seven markers reuse the existing
+`!FAULT(...)` inline channel and FAULTS footer:
+
+| Construct | Marker |
+| --- | --- |
+| Hook called via alias or namespace (`R.useState`, renamed import) | `!FAULT(aliased-hook)` |
+| Dynamic component (`<Tag/>` where Tag is a lowercase variable or member expression) | `!FAULT(dynamic-component)` |
+| Spread props as the sole prop source (`{...rest}`) | rendered `...rest` + `!FAULT(spread-props)` |
+| Render prop / children-as-function | `!FAULT(render-prop)`, body summarized as flow |
+| Hook call inside conditional | `!FAULT(conditional-hook)` |
+| Multiple or nested JSX return paths collapsed to one render root | `!FAULT(render-control-flow)` |
+| Render tree exceeding op budget | explicit `…+N` + `!FAULT(render-truncated)` |
+
+Frontend IR remains a reasoning representation, not the write authority: edits
+still require faulting exact current source and verifying the slice hash, per
+the existing contract (Step 5).
+
+### Corpus run
+
+Compiled at L2 over two real corpora — KERN's own `app/` directory (4 files:
+`layout.jsx`, `page.jsx`, `docs/layout.jsx`, `docs/page.jsx`) and a fresh
+shallow clone of [`vercel/commerce`](https://github.com/vercel/commerce) (65
+`.js`/`.jsx`/`.ts`/`.tsx` files, `node_modules` excluded):
+
+```text
+files=69 crashes=0 components=61 faults=8
+ratio min=1.9 median=3.3 max=10.1
+```
+
+Zero crashes, components detected on both corpora, ambiguous constructs (spread
+props, dynamic components, render-prop children) surfaced as faults rather than
+silently dropped — the done bar this spec set for Stage 1 MVP.

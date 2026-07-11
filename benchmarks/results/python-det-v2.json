@@ -5,25 +5,25 @@
       "bucket": "large(>10k)",
       "fidelity_missing": [],
       "file": "skills/kern/scripts/kern_cache.py",
-      "source_tokens": 15181,
+      "source_tokens": 15467,
       "tiers": {
         "L1": {
           "fidelity_missing": [],
           "fidelity_ok": true,
-          "ratio": 3.0,
-          "tokens": 5061
+          "ratio": 3.01,
+          "tokens": 5139
         },
         "L2": {
           "fidelity_missing": [],
           "fidelity_ok": true,
           "ratio": 2.38,
-          "tokens": 6370
+          "tokens": 6494
         },
         "L3": {
           "fidelity_missing": [],
           "fidelity_ok": true,
           "ratio": 1.18,
-          "tokens": 12867
+          "tokens": 13066
         }
       }
     }
