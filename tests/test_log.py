@@ -84,6 +84,10 @@ class TestOperationLogging(unittest.TestCase):
         log_contents = (self.root / ".kern" / "log.jsonl").read_text()
         self.assertNotIn("hunter2secretvalue", log_contents)
 
+    def test_redact_line_scrubs_value_without_delimiter(self):
+        out = kern_cache.redact_line("push rejected using ghp_ABCDEFGHIJKLMNOP12345 by client")
+        self.assertNotIn("ghp_ABCDEFGHIJKLMNOP12345", out)
+
 
 class TestLogCommand(unittest.TestCase):
     def setUp(self):

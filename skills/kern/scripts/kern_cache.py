@@ -43,12 +43,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "default_tier": "L2",
 }
 
-SECRET_NAME = re.compile(
-    r"(?i)(api[_-]?key|access[_-]?key|auth|bearer|credential|passwd|password|private[_-]?key|secret|token)"
-)
 SECRET_VALUE = re.compile(
     r"(?i)(?:sk|rk|pk|s2)[_-][A-Za-z0-9_-]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
     r"(?:aws|ghp|github_pat)_[A-Za-z0-9_-]{12,}"
+)
+SECRET_ASSIGNMENT = re.compile(
+    r"(?i)(api[_-]?key|access[_-]?key|auth|bearer|credential|passwd|password|private[_-]?key|secret|token)"
+    r"['\"]?\s*[:=]\s*\S"
 )
 SPACE = re.compile(r"\s+")
 
@@ -393,7 +394,8 @@ GENERIC_KEEP = re.compile(
 
 
 def redact_line(line: str) -> str:
-    if SECRET_VALUE.search(line) or (SECRET_NAME.search(line) and re.search(r"[:=]", line)):
+    line = SECRET_VALUE.sub(lambda m: f"<REDACTED len={len(m.group(0))}>", line)
+    if SECRET_ASSIGNMENT.search(line):
         digest = sha256_bytes(line.encode("utf-8", "replace"))[:12]
         left = re.split(r"[:=]", line, maxsplit=1)[0]
         return f"{left}=<REDACTED_LINE sha256={digest}>"
@@ -595,7 +597,7 @@ def commit_file(
             if not appended_lines[0].startswith("ENRICHMENT model="):
                 raise ValueError("Appended section must start with 'ENRICHMENT model=<name>'")
             for line in appended_lines:
-                if SECRET_VALUE.search(line) or (SECRET_NAME.search(line) and re.search(r"[:=]", line)):
+                if SECRET_VALUE.search(line) or SECRET_ASSIGNMENT.search(line):
                     raise ValueError("Enrichment line contains a likely credential")
             for line in appended_lines[1:]:
                 if line.strip() and not line.startswith("INTENT "):

@@ -84,6 +84,16 @@ class TestEnrichmentAppendOnly(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.commit(staged)
 
+    def test_intent_prose_mentioning_token_accepted(self):
+        staged = self.baseline + "\nENRICHMENT model=test-model\nINTENT fn_0: parses bearer token from Authorization header\n"
+        result = self.commit(staged)
+        self.assertEqual(result["status"], "ready")
+
+    def test_intent_assignment_shaped_secret_rejected(self):
+        staged = self.baseline + "\nENRICHMENT model=test-model\nINTENT fn_0: uses password=hunter2secretvalue here\n"
+        with self.assertRaises(ValueError):
+            self.commit(staged)
+
 
 if __name__ == "__main__":
     unittest.main()
