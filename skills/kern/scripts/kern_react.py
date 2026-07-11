@@ -456,6 +456,13 @@ def _extract_render(node, react, ntext, events_out):
                                           line=jsx_root.start_point[0] + 1))
 
 
+def _collect_faults(nodes, faults):
+    for n in nodes:
+        if n.risk:
+            faults.append(f"{n.risk}(L{n.line})")
+        _collect_faults(n.children, faults)
+
+
 def _render_lines(nodes, level, depth, faults, lines):
     for n in nodes:
         keep = level >= 3 or n.is_component or n.is_structure
@@ -478,6 +485,9 @@ def _render_lines(nodes, level, depth, faults, lines):
             if child.risk:
                 piece += f" !FAULT({child.risk})"
                 faults.append(f"{child.risk}(L{child.line})")
+            # The inlined child's descendants are dropped from the tree, but
+            # their risks must still reach the FAULT-BEFORE footer.
+            _collect_faults(child.children, faults)
             lines.append("  " * depth + piece)
             continue
         lines.append("  " * depth + piece)

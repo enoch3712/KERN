@@ -423,6 +423,12 @@ class TestEmit(unittest.TestCase):
         il = self.il("L2", src)
         self.assertIn("IF open > UserDetails", il)
 
+    def test_l2_inlined_child_descendant_fault_reaches_footer(self):
+        src = ("function T({ open, rest }) {\n"
+               "  return <div>{open && <UserDetails><div {...rest} /></UserDetails>}</div>;\n}\n")
+        il = self.il("L2", src)
+        self.assertIn("spread-props(L", il)
+
     def test_l3_component_body_flow_visible(self):
         src = ("function Card({ items, loading }) {\n"
                "  const total = computeTotal(items);\n"
