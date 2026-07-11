@@ -387,6 +387,18 @@ class TestEmit(unittest.TestCase):
         il = self.il("L2")
         self.assertIn("F formatName(name: string) -> string", il)
 
+    def test_l2_collapsed_node_fault_reaches_footer(self):
+        src = ("function T({ props }) {\n"
+               "  return <div {...props}><span>hi</span></div>;\n}\n")
+        il = self.il("L2", src)
+        self.assertIn("spread-props(L", il)   # footer net holds at L2
+
+    def test_l2_inline_when_child_has_only_host_children(self):
+        src = ("function T({ open, user }) {\n"
+               "  return <div>{open && <UserDetails user={user}><span>x</span></UserDetails>}</div>;\n}\n")
+        il = self.il("L2", src)
+        self.assertIn("IF open > UserDetails", il)
+
 
 if __name__ == "__main__":
     unittest.main()

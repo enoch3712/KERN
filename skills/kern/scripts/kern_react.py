@@ -434,6 +434,8 @@ def _render_lines(nodes, level, depth, faults, lines):
     for n in nodes:
         keep = level >= 3 or n.is_component or n.is_structure
         if not keep:
+            if n.risk:
+                faults.append(f"{n.risk}(L{n.line})")
             _render_lines(n.children, level, depth, faults, lines)
             continue
         piece = n.tag
@@ -443,7 +445,8 @@ def _render_lines(nodes, level, depth, faults, lines):
             piece += f" !FAULT({n.risk})"
             faults.append(f"{n.risk}(L{n.line})")
         kept_children = _kept(n.children, level)
-        if level == 2 and n.is_structure and len(kept_children) == 1 and not kept_children[0].children:
+        if (level == 2 and n.is_structure and len(kept_children) == 1
+                and not _kept(kept_children[0].children, level)):
             child = kept_children[0]
             piece += f" > {child.tag}"
             if child.risk:
