@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import copy
 import hashlib
 import json
@@ -20,8 +19,9 @@ from typing import Any, Iterable
 
 
 SCHEMA = "kern-cache/0.1"
-CODEC_VERSION = "kern-il/0.1"
-BASELINE_GENERATOR = "deterministic-baseline/0.1"
+CODEC_VERSION = "kern-il/0.2"
+BASELINE_GENERATOR = "kern-det/0.2"
+TSJS_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
 CACHE_DIRNAME = ".kern"
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema": SCHEMA,
@@ -39,6 +39,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     ],
     "max_file_bytes": 2_000_000,
     "image_profile": "dense",
+    "min_ir_tokens": 600,
+    "default_tier": "L2",
 }
 
 SECRET_NAME = re.compile(
@@ -193,7 +195,7 @@ def load_manifest(path: Path, root: Path) -> dict[str, Any]:
         raise RuntimeError(f"Invalid KERN manifest {path}: {exc}") from exc
     if manifest.get("schema") != SCHEMA:
         raise RuntimeError(f"Unsupported manifest schema: {manifest.get('schema')!r}")
-    if Path(manifest.get("repo_root", "")).resolve() != root:
+    if Path(manifest.get("repo_root", "")).resolve() != root.resolve():
         raise RuntimeError("Manifest repository root does not match --repo")
     manifest.setdefault("files", {})
     return manifest
@@ -203,7 +205,7 @@ def normalize_rel(root: Path, value: str, require_file: bool = True) -> tuple[st
     candidate = Path(value).expanduser()
     path = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
     try:
-        relative = path.relative_to(root)
+        relative = path.relative_to(root.resolve())
     except ValueError as exc:
         raise ValueError(f"Path escapes repository root: {path}") from exc
     if CACHE_DIRNAME in relative.parts:
@@ -242,6 +244,24 @@ def git_files(root: Path) -> list[str] | None:
         return [item.decode("utf-8", "surrogateescape") for item in result.stdout.split(b"\0") if item]
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def git_revision(root: Path) -> str:
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True,
+        )
+        if head.returncode != 0:
+            return "none"
+        sha = head.stdout.strip()
+        dirty = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True,
+        )
+        return f"dirty:{sha}" if dirty.stdout.strip() else sha
+    except OSError:
+        return "none"
 
 
 def walk_files(root: Path, excluded: set[str]) -> Iterable[str]:
@@ -363,211 +383,6 @@ def refresh_one(root: Path, paths: dict[str, Path], relative: str, source: Path)
     return digest, record
 
 
-def sanitize_string(value: str, secret_hint: bool = False) -> str:
-    digest = sha256_bytes(value.encode("utf-8", "surrogatepass"))[:12]
-    if secret_hint or SECRET_VALUE.search(value):
-        return f"<REDACTED len={len(value)} sha256={digest}>"
-    if len(value) > 160:
-        return f"<STR len={len(value)} sha256={digest}>"
-    return value
-
-
-class LiteralSanitizer(ast.NodeTransformer):
-    def visit_Constant(self, node: ast.Constant):
-        if isinstance(node.value, str):
-            return ast.copy_location(ast.Constant(sanitize_string(node.value)), node)
-        return node
-
-
-def expr(node: ast.AST | None, max_length: int = 260, secret_hint: bool = False) -> str:
-    if node is None:
-        return "None"
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        value = sanitize_string(node.value, secret_hint)
-        rendered = repr(value)
-    else:
-        clone = LiteralSanitizer().visit(copy.deepcopy(node))
-        ast.fix_missing_locations(clone)
-        try:
-            rendered = ast.unparse(clone)
-        except Exception:
-            rendered = f"<{node.__class__.__name__}>"
-    rendered = SPACE.sub(" ", rendered).strip()
-    if secret_hint and rendered and not rendered.startswith("'<REDACTED"):
-        digest = sha256_bytes(rendered.encode())[:12]
-        rendered = f"<REDACTED_EXPR len={len(rendered)} sha256={digest}>"
-    if len(rendered) > max_length:
-        digest = sha256_bytes(rendered.encode())[:12]
-        rendered = rendered[: max_length - 32] + f"…<sha256={digest}>"
-    return rendered
-
-
-def target_text(node: ast.AST) -> str:
-    try:
-        return SPACE.sub(" ", ast.unparse(node)).strip()
-    except Exception:
-        return f"<{node.__class__.__name__}>"
-
-
-def call_name(node: ast.Call) -> str:
-    try:
-        return expr(node.func, 100)
-    except Exception:
-        return "<call>"
-
-
-def outline(statements: list[ast.stmt], depth: int = 0, limit: int = 140) -> list[str]:
-    result: list[str] = []
-
-    def emit(node: ast.AST, opcode: str, detail: str = "") -> None:
-        if len(result) >= limit:
-            return
-        prefix = "  " * depth
-        line = getattr(node, "lineno", "?")
-        result.append(f"{prefix}{line}|{opcode}" + (f" {detail}" if detail else ""))
-
-    for statement in statements:
-        if len(result) >= limit:
-            break
-        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
-            continue
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            emit(statement, "NESTED", getattr(statement, "name", "?"))
-        elif isinstance(statement, ast.Assign):
-            names = ",".join(target_text(item) for item in statement.targets)
-            emit(statement, "SET", f"{names}={expr(statement.value, secret_hint=bool(SECRET_NAME.search(names)))}")
-        elif isinstance(statement, ast.AnnAssign):
-            name = target_text(statement.target)
-            emit(statement, "SET", f"{name}:{expr(statement.annotation)}={expr(statement.value, secret_hint=bool(SECRET_NAME.search(name)))}")
-        elif isinstance(statement, ast.AugAssign):
-            emit(statement, "MUT", f"{target_text(statement.target)} {statement.op.__class__.__name__}= {expr(statement.value)}")
-        elif isinstance(statement, ast.If):
-            emit(statement, "IF", expr(statement.test))
-            result.extend(outline(statement.body, depth + 1, max(0, limit - len(result))))
-            if statement.orelse and len(result) < limit:
-                emit(statement, "ELSE")
-                result.extend(outline(statement.orelse, depth + 1, max(0, limit - len(result))))
-        elif isinstance(statement, (ast.For, ast.AsyncFor)):
-            emit(statement, "LOOP", f"{target_text(statement.target)} in {expr(statement.iter)}")
-            result.extend(outline(statement.body, depth + 1, max(0, limit - len(result))))
-        elif isinstance(statement, ast.While):
-            emit(statement, "WHILE", expr(statement.test))
-            result.extend(outline(statement.body, depth + 1, max(0, limit - len(result))))
-        elif isinstance(statement, (ast.With, ast.AsyncWith)):
-            emit(statement, "WITH", ", ".join(expr(item.context_expr) for item in statement.items))
-            result.extend(outline(statement.body, depth + 1, max(0, limit - len(result))))
-        elif isinstance(statement, (ast.Try, getattr(ast, "TryStar", ast.Try))):
-            emit(statement, "TRY")
-            result.extend(outline(statement.body, depth + 1, max(0, limit - len(result))))
-            for handler in statement.handlers:
-                emit(handler, "CATCH", expr(handler.type))
-                result.extend(outline(handler.body, depth + 1, max(0, limit - len(result))))
-            if statement.finalbody:
-                emit(statement, "FINALLY")
-                result.extend(outline(statement.finalbody, depth + 1, max(0, limit - len(result))))
-        elif isinstance(statement, ast.Return):
-            emit(statement, "RET", expr(statement.value))
-        elif isinstance(statement, ast.Raise):
-            emit(statement, "ERR", expr(statement.exc))
-        elif isinstance(statement, ast.Assert):
-            emit(statement, "ASSERT", expr(statement.test))
-        elif isinstance(statement, ast.Expr):
-            value = statement.value
-            if isinstance(value, ast.Await):
-                emit(statement, "AWAIT", expr(value.value))
-            elif isinstance(value, ast.Call):
-                emit(statement, "CALL", expr(value))
-            elif isinstance(value, (ast.Yield, ast.YieldFrom)):
-                emit(statement, "YIELD", expr(getattr(value, "value", None)))
-        elif isinstance(statement, ast.Match):
-            emit(statement, "MATCH", expr(statement.subject))
-            for case in statement.cases:
-                emit(statement, "CASE", expr(case.pattern))
-                result.extend(outline(case.body, depth + 1, max(0, limit - len(result))))
-        elif isinstance(statement, ast.Delete):
-            emit(statement, "DEL", ",".join(target_text(item) for item in statement.targets))
-        elif isinstance(statement, ast.Break):
-            emit(statement, "BREAK")
-        elif isinstance(statement, ast.Continue):
-            emit(statement, "CONTINUE")
-    return result[:limit]
-
-
-def function_card(node: ast.FunctionDef | ast.AsyncFunctionDef, qualified: str) -> list[str]:
-    prefix = "ASYNC F" if isinstance(node, ast.AsyncFunctionDef) else "F"
-    signature = expr(node.args, 300)
-    returns = expr(node.returns, 140) if node.returns else "Any"
-    decorators = [expr(item, 100) for item in node.decorator_list]
-    calls: list[str] = []
-    for child in ast.walk(node):
-        if isinstance(child, ast.Call):
-            name = call_name(child)
-            if name not in calls:
-                calls.append(name)
-    lines = [f"{prefix} {qualified}({signature})->{returns} @L{node.lineno}-{node.end_lineno or node.lineno}"]
-    if decorators:
-        lines.append("  DECORATORS " + ", ".join(decorators))
-    doc = ast.get_docstring(node, clean=True)
-    if doc:
-        lines.append("  DOC " + sanitize_string(doc.splitlines()[0])[:180])
-    if calls:
-        shown = calls[:40]
-        lines.append("  CALLS " + ", ".join(shown) + (f" …+{len(calls)-40}" if len(calls) > 40 else ""))
-    flow = outline(node.body)
-    lines.extend("  " + item for item in flow)
-    if len(flow) >= 140:
-        lines.append("  [...] flow outline capped; fault exact source")
-    return lines
-
-
-def python_ir(text: str, relative: str, digest: str) -> str:
-    try:
-        tree = ast.parse(text)
-    except SyntaxError as exc:
-        return generic_ir(text, relative, digest, f"python parse failed at L{exc.lineno}: {exc.msg}")
-    lines = [
-        CODEC_VERSION.upper(),
-        f"source_rel={relative}",
-        f"source_sha256={digest}",
-        f"generator={BASELINE_GENERATOR}",
-        "mode=python-ast-baseline",
-        "",
-        f"MODULE @L1-{max(1, len(text.splitlines()))}",
-    ]
-    for node in tree.body:
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            lines.append(f"IMPORT @L{node.lineno} {expr(node)}")
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names = ",".join(target_text(target) for target in targets)
-            value = node.value
-            annotation = f":{expr(node.annotation)}" if isinstance(node, ast.AnnAssign) else ""
-            lines.append(
-                f"C @L{node.lineno} {names}{annotation}={expr(value, secret_hint=bool(SECRET_NAME.search(names)))}"
-            )
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            lines.append("")
-            lines.extend(function_card(node, node.name))
-        elif isinstance(node, ast.ClassDef):
-            bases = ",".join(expr(base, 100) for base in node.bases)
-            lines.extend(["", f"CLASS {node.name}({bases}) @L{node.lineno}-{node.end_lineno or node.lineno}"])
-            for member in node.body:
-                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    lines.append("")
-                    lines.extend(function_card(member, f"{node.name}.{member.name}"))
-    lines.extend(
-        [
-            "",
-            "DECLARED_OMISSIONS / REQUIRED PAGE-FAULTS",
-            "  Comments, formatting, most docstring prose, and exact statement bodies are omitted.",
-            "  Long strings are represented by length and digest; likely credentials are redacted.",
-            "  Fault exact source before edits, exact literal claims, security, concurrency, math, regex, or exception matching.",
-        ]
-    )
-    return "\n".join(lines).rstrip() + "\n"
-
-
 GENERIC_KEEP = re.compile(
     r"^\s*(?:import\b|from\b|export\b|package\b|use\b|class\b|interface\b|type\b|enum\b|"
     r"(?:async\s+)?(?:def|function|fn|func)\b|(?:public|private|protected|static|final|abstract)\b|"
@@ -611,12 +426,47 @@ def generic_ir(text: str, relative: str, digest: str, parse_note: str = "generic
     return "\n".join(lines).rstrip() + "\n"
 
 
-def baseline_for(source: Path, relative: str, digest: str) -> str:
+def stub_ir(text: str, relative: str, digest: str) -> str:
+    lines = [
+        CODEC_VERSION.upper(),
+        f"source_rel={relative}",
+        f"source_sha256={digest}",
+        f"generator={BASELINE_GENERATOR}",
+        "mode=source-cheaper",
+        f"QA source is ~{max(1, len(text) // 4)} tokens ({len(text.splitlines())} lines), below the IL floor; fault exact source.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def baseline_for(root: Path, source: Path, relative: str, digest: str,
+                 config: dict[str, Any], tier: str | None = None) -> tuple[str, str]:
+    """Return (il_text, tier_used)."""
     text = source.read_text(encoding="utf-8", errors="replace")
-    return python_ir(text, relative, digest) if source.suffix.lower() == ".py" else generic_ir(text, relative, digest)
+    if max(1, len(text) // 4) < int(config.get("min_ir_tokens", 600)):
+        return stub_ir(text, relative, digest), "stub"
+    selected = tier or str(config.get("default_tier", "L2"))
+    note = "generic language fallback"
+    try:
+        import kern_compile
+        suffix = source.suffix.lower()
+        module = None
+        if suffix == ".py":
+            module = kern_compile.parse_python(text)
+        elif suffix in TSJS_SUFFIXES and kern_compile.tsjs_available():
+            module = kern_compile.parse_tsjs(text, typescript=suffix in {".ts", ".tsx"})
+        if module is not None:
+            if module.parse_error:
+                note = f"parse failed: {module.parse_error}"
+            else:
+                revision = git_revision(root)
+                return kern_compile.emit_il(module, relative, digest, revision, selected), selected
+    except Exception as exc:
+        note = f"deterministic compiler failed: {exc}"
+    return generic_ir(text, relative, digest, note), "generic"
 
 
-def ensure_file(root: Path, paths: dict[str, Path], relative: str, source: Path) -> dict[str, Any]:
+def ensure_file(root: Path, paths: dict[str, Path], relative: str, source: Path,
+                config: dict[str, Any], tier: str | None = None) -> dict[str, Any]:
     digest, record = refresh_one(root, paths, relative, source)
     artifacts = artifact_paths(paths, relative)
     ir_exists = artifacts["ir"].is_file()
@@ -625,9 +475,10 @@ def ensure_file(root: Path, paths: dict[str, Path], relative: str, source: Path)
         and record.get("ir_source_sha256") == digest
         and ir_exists
         and record.get("ir_sha256") == sha256_file(artifacts["ir"])
+        and (tier is None or record.get("ir_tier") == tier)
     )
     if not usable:
-        ir = baseline_for(source, relative, digest)
+        ir, tier_used = baseline_for(root, source, relative, digest, config, tier)
         if sha256_file(source) != digest:
             raise RuntimeError("Source changed while baseline IR was generated; retry ensure")
         atomic_write(artifacts["ir"], ir.encode("utf-8"))
@@ -642,6 +493,7 @@ def ensure_file(root: Path, paths: dict[str, Path], relative: str, source: Path)
                     "ir_source_sha256": digest,
                     "ir_sha256": sha256_file(artifacts["ir"]),
                     "ir_generator": BASELINE_GENERATOR,
+                    "ir_tier": tier_used,
                     "image_status": "stale",
                     "ir_rel": artifacts["ir"].relative_to(root).as_posix(),
                     "images_rel": artifacts["images"].relative_to(root).as_posix(),
@@ -665,8 +517,9 @@ def ensure_file(root: Path, paths: dict[str, Path], relative: str, source: Path)
     }
 
 
-def prepare_file(root: Path, paths: dict[str, Path], relative: str, source: Path) -> dict[str, Any]:
-    ensured = ensure_file(root, paths, relative, source)
+def prepare_file(root: Path, paths: dict[str, Path], relative: str, source: Path,
+                 config: dict[str, Any]) -> dict[str, Any]:
+    ensured = ensure_file(root, paths, relative, source, config)
     digest = ensured["source_sha256"]
     job_id = uuid.uuid4().hex
     staging = paths["staging"] / Path(relative + f".{digest[:12]}.{job_id}.kern-il.txt")
@@ -864,7 +717,7 @@ def sync_cache(
         for relative in pending:
             source = root / relative
             try:
-                result = ensure_file(root, paths, relative, source)
+                result = ensure_file(root, paths, relative, source, config)
                 ensured.append(
                     {
                         "source_rel": relative,
@@ -933,9 +786,13 @@ def parse_args() -> argparse.Namespace:
     sync = sub.add_parser("sync")
     sync.add_argument("--eager", action="store_true", help="Generate deterministic IR for every stale/missing file")
     sync.add_argument("--limit", type=int, help="Maximum files to ensure in eager mode")
-    for name in ("ensure", "prepare", "paths"):
-        command = sub.add_parser(name)
-        command.add_argument("file")
+    ensure = sub.add_parser("ensure")
+    ensure.add_argument("file")
+    ensure.add_argument("--tier", choices=("L1", "L2", "L3"))
+    prepare = sub.add_parser("prepare")
+    prepare.add_argument("file")
+    paths_cmd = sub.add_parser("paths")
+    paths_cmd.add_argument("file")
     commit = sub.add_parser("commit")
     commit.add_argument("file")
     commit.add_argument("--ir-file", required=True, type=Path)
@@ -967,9 +824,9 @@ def main() -> int:
         else:
             relative, source = normalize_rel(root, args.file)
             if args.command == "ensure":
-                result = ensure_file(root, paths, relative, source)
+                result = ensure_file(root, paths, relative, source, config, tier=getattr(args, "tier", None))
             elif args.command == "prepare":
-                result = prepare_file(root, paths, relative, source)
+                result = prepare_file(root, paths, relative, source, config)
             elif args.command == "paths":
                 result = paths_for(root, paths, relative, source)
             elif args.command == "commit":
