@@ -28,9 +28,10 @@ const installs = [
     update: "codex plugin marketplace upgrade kern",
     model: (
       <>
-        Copy <code>templates/codex/kern-compiler.toml</code> into{" "}
-        <code>~/.codex/agents/</code> to pin an economical compiler model, or
-        leave the model unset for dynamic routing.
+        Run <code>mkdir -p ~/.codex/agents &amp;&amp; curl -fsSL
+        https://raw.githubusercontent.com/enoch3712/KERN/main/templates/codex/kern-compiler.toml
+        -o ~/.codex/agents/kern-compiler.toml</code>, then pin a model or leave it
+        unset for dynamic routing.
       </>
     ),
   },
@@ -52,9 +53,10 @@ const installs = [
       "claude plugin marketplace update kern && claude plugin update kern@kern",
     model: (
       <>
-        Edit <code>agents/claude/kern-compiler.md</code>. Its compiler defaults to
-        the <code>sonnet</code> alias and remains independent of the parent runtime
-        model.
+        Run <code>mkdir -p ~/.claude/agents &amp;&amp; curl -fsSL
+        https://raw.githubusercontent.com/enoch3712/KERN/main/agents/claude/kern-compiler.md
+        -o ~/.claude/agents/kern-compiler.md</code>, then edit its model. The
+        user-level agent overrides the plugin copy.
       </>
     ),
   },

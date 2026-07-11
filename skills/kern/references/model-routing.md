@@ -13,13 +13,13 @@ Cache validity depends on source hash plus codec version. Changing compiler mode
 
 ## Codex
 
-Install the plugin, then optionally copy [`templates/codex/kern-compiler.toml`](../../../templates/codex/kern-compiler.toml) to `~/.codex/agents/kern-compiler.toml`. Set `model` and `model_reasoning_effort` to a model available in your workspace. Omit `model` to let Codex route dynamically.
+Install the plugin, then optionally download [`templates/codex/kern-compiler.toml`](../../../templates/codex/kern-compiler.toml) to `~/.codex/agents/kern-compiler.toml` from the KERN repository. Set `model` and `model_reasoning_effort` to a model available in your workspace. Omit `model` to let Codex route dynamically.
 
 The agent should be read-heavy, workspace-write only for the supplied staging path, and instructed never to edit source.
 
 ## Claude Code
 
-The plugin ships [`agents/claude/kern-compiler.md`](../../../agents/claude/kern-compiler.md). Its `model` frontmatter defaults to `sonnet`; change it to another allowed alias or full model ID when needed.
+The plugin ships [`agents/claude/kern-compiler.md`](../../../agents/claude/kern-compiler.md). Its `model` frontmatter defaults to `sonnet`. Copy that file to `~/.claude/agents/kern-compiler.md` (or the project's `.claude/agents/`) before changing it; the user/project definition overrides the versioned plugin copy.
 
 Claude Code resolves the compiler agent separately from the parent runtime model, so the task-solving model can remain stronger than the compiler.
 

@@ -38,7 +38,8 @@ The plugin works with deterministic baseline IL even without a subagent. For sep
 
 ```bash
 mkdir -p ~/.codex/agents
-cp templates/codex/kern-compiler.toml ~/.codex/agents/kern-compiler.toml
+curl -fsSL https://raw.githubusercontent.com/enoch3712/KERN/main/templates/codex/kern-compiler.toml \
+  -o ~/.codex/agents/kern-compiler.toml
 ```
 
 Edit `model` and `model_reasoning_effort` in that file to use an economical model available in your workspace. Leave `model` commented to let Codex route dynamically.
@@ -67,7 +68,15 @@ Scopes:
 - `project`: shared through `.claude/settings.json`.
 - `local`: private to the current checkout through `.claude/settings.local.json`.
 
-The plugin includes `agents/claude/kern-compiler.md`, configured with `model: sonnet`. Change that alias or use a full allowed model ID to control the compiler independently from the parent runtime model.
+The plugin includes `agents/claude/kern-compiler.md`, configured with `model: sonnet`. To customize it without editing Claude's versioned plugin cache, create a user-level override:
+
+```bash
+mkdir -p ~/.claude/agents
+curl -fsSL https://raw.githubusercontent.com/enoch3712/KERN/main/agents/claude/kern-compiler.md \
+  -o ~/.claude/agents/kern-compiler.md
+```
+
+Change the override's alias or use a full allowed model ID to control the compiler independently from the parent runtime model. User- and project-level agent definitions take precedence over the plugin agent with the same name.
 
 Update with:
 

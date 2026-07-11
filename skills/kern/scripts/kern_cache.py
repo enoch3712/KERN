@@ -619,10 +619,12 @@ def baseline_for(source: Path, relative: str, digest: str) -> str:
 def ensure_file(root: Path, paths: dict[str, Path], relative: str, source: Path) -> dict[str, Any]:
     digest, record = refresh_one(root, paths, relative, source)
     artifacts = artifact_paths(paths, relative)
+    ir_exists = artifacts["ir"].is_file()
     usable = (
         record.get("status") in {"ready", "baseline_ready"}
         and record.get("ir_source_sha256") == digest
-        and artifacts["ir"].is_file()
+        and ir_exists
+        and record.get("ir_sha256") == sha256_file(artifacts["ir"])
     )
     if not usable:
         ir = baseline_for(source, relative, digest)
@@ -703,12 +705,22 @@ def commit_file(
     if not payload.strip():
         raise ValueError("Staging IR is empty")
     text = payload.decode("utf-8", "strict")
-    if not text.splitlines() or text.splitlines()[0].strip() != CODEC_VERSION.upper():
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != CODEC_VERSION.upper():
         raise ValueError(f"Staging IR must start with {CODEC_VERSION.upper()}")
-    if f"source_sha256={expected_sha}" not in text:
+    headers: dict[str, str] = {}
+    for line in lines[1:8]:
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in {"source_rel", "source_sha256", "generator"} and key not in headers:
+            headers[key] = value
+    if headers.get("source_sha256") != expected_sha:
         raise ValueError("Staging IR does not declare the expected source_sha256")
-    if f"source_rel={relative}" not in text:
+    if headers.get("source_rel") != relative:
         raise ValueError("Staging IR does not declare the expected source_rel")
+    if not headers.get("generator"):
+        raise ValueError("Staging IR does not declare a generator")
     artifacts = artifact_paths(paths, relative)
     atomic_write(artifacts["ir"], payload)
     if sha256_file(source) != expected_sha:
@@ -766,6 +778,7 @@ def render_file(
         record.get("status") not in {"ready", "baseline_ready"}
         or record.get("ir_source_sha256") != digest
         or not artifacts["ir"].is_file()
+        or record.get("ir_sha256") != sha256_file(artifacts["ir"])
     ):
         raise RuntimeError("IR is missing or stale; run ensure and, when available, KERN commit first")
     selected = profile or str(config.get("image_profile", "dense"))
