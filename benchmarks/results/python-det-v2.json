@@ -1,0 +1,26 @@
+{
+  "estimator": "chars/4",
+  "files": [
+    {
+      "bucket": "medium(2k-10k)",
+      "fidelity_missing": [],
+      "file": "skills/kern/scripts/kern_cache.py",
+      "source_tokens": 8789,
+      "tiers": {
+        "L1": {
+          "ratio": 2.64,
+          "tokens": 3331
+        },
+        "L2": {
+          "ratio": 1.9,
+          "tokens": 4619
+        },
+        "L3": {
+          "ratio": 0.97,
+          "tokens": 9083
+        }
+      }
+    }
+  ],
+  "schema": "kern-bench/0.2"
+}
