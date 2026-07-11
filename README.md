@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <strong>Compile repositories for machine attention.</strong><br>
-  Lazy semantic context for coding agents, with an exact-source path before every write.
+  <strong>Compile large codebases for machine attention.</strong><br>
+  Lazy semantic context for repositories too large to keep raw in a model window, with an exact-source path before every write.
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@
 
 ---
 
-KERN maintains a lazy, content-addressed intermediate-language mirror of a software repository. It gives coding agents a compact semantic working set, recompiles files only when their contents change or become relevant, and faults authoritative source back into context before an edit.
+KERN is designed for large codebases. It maintains a lazy, content-addressed intermediate-language mirror of a software repository, gives coding agents a compact semantic working set, recompiles files only when their contents change or become relevant, and faults authoritative source back into context before an edit.
 
 ## Compression first
 

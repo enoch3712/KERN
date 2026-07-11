@@ -233,8 +233,9 @@ export default function DocsPage() {
           <p className={styles.kicker}>KERN / QUICK START</p>
           <h1 id="docs-title">Install for your environment.</h1>
           <p>
-            One KERN skill, three native host integrations. Choose a provider to see
-            only the command, routing defaults, and maintenance details that apply.
+            KERN is built for codebases too large to keep raw in a model window.
+            Choose a provider to see only the command, routing defaults, and
+            maintenance details that apply.
           </p>
           <div className={styles.requirements} aria-label="Requirements">
             <span>Requires</span>

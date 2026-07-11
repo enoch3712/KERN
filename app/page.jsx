@@ -216,9 +216,9 @@ export default function Home() {
       <div id="main-content">
         <section className="hero" id="top">
           <div className="hero-copy">
-            <p className="eyebrow">OPEN-SOURCE CONTEXT COMPILER · v0.1.1</p>
+            <p className="eyebrow">OPEN-SOURCE CONTEXT COMPILER FOR LARGE CODEBASES · v0.1.1</p>
             <h1><em>12.75× smaller.</em><br />Exact source when it matters.</h1>
-            <p className="hero-lede">KERN compiles repositories into a compact intermediate language, caches unchanged pages, and faults exact source back in before every edit.</p>
+            <p className="hero-lede">Built for large codebases, KERN compiles repositories into a compact intermediate language, caches unchanged pages, and faults exact source back in before every edit.</p>
             <p className="pilot-qualifier">Selected-representation reduction in one 3,704-line Python pilot—not total agent-loop savings.</p>
             <div className="hero-actions">
               <a className="button button-primary" href="#install">Install KERN <Arrow /></a>
@@ -499,7 +499,7 @@ export default function Home() {
 
         <footer>
           <Brand />
-          <p>Compile repositories for machine attention.</p>
+          <p>Compile large codebases for machine attention.</p>
           <div><a href={`${BASE_PATH}/docs/`}>Docs</a><a href="https://github.com/enoch3712/KERN">GitHub</a><a href="https://github.com/enoch3712/KERN/blob/main/LICENSE">License</a></div>
           <small>Product and language marks belong to their respective owners. Compatibility references do not imply endorsement.</small>
         </footer>

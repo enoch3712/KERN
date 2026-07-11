@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
   <title id="title">KERN</title>
-  <desc id="desc">Compile repositories for machine attention. 12.75 times smaller selected representation in the pilot.</desc>
+  <desc id="desc">A context compiler for large codebases. 12.75 times smaller selected representation in the pilot.</desc>
   <defs>
     <linearGradient id="accent" x1="0" x2="1">
       <stop stop-color="#b7ff5b"/>
@@ -15,6 +15,7 @@
     <rect x="34" y="11" width="10" height="42" rx="5" opacity=".82"/>
   </g>
   <text x="170" y="136" fill="#eefbf4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="26" font-weight="800" letter-spacing="4">KERN/IL</text>
+  <text x="1030" y="132" fill="#82958d" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700" letter-spacing="2" text-anchor="end">FOR LARGE CODEBASES</text>
   <text x="95" y="270" fill="url(#accent)" font-family="Inter, Arial, sans-serif" font-size="84" font-weight="750" letter-spacing="-5">12.75× smaller</text>
   <text x="95" y="346" fill="#eefbf4" font-family="Inter, Arial, sans-serif" font-size="61" font-weight="650" letter-spacing="-3">selected representation.</text>
   <text x="98" y="418" fill="#eefbf4" font-family="Inter, Arial, sans-serif" font-size="36" font-weight="600" letter-spacing="-1.5">Exact source before every write.</text>

@@ -6,7 +6,7 @@ export const metadata = {
     template: "%s — KERN",
   },
   description:
-    "A lazy, content-addressed intermediate language and context runtime for coding agents, with exact-source page faults before every write.",
+    "A lazy, content-addressed context compiler for large codebases, with exact-source page faults before every write.",
   metadataBase: new URL("https://enoch3712.github.io/KERN/"),
   alternates: {
     canonical: "./",
@@ -21,7 +21,7 @@ export const metadata = {
   openGraph: {
     title: "KERN — Compile repositories for machine attention",
     description:
-      "Lazy semantic context for coding agents, with an exact-source path before every write.",
+      "Lazy semantic context for large codebases, with an exact-source path before every write.",
     type: "website",
     url: "./",
     siteName: "KERN",
@@ -30,7 +30,7 @@ export const metadata = {
   twitter: {
     card: "summary_large_image",
     title: "KERN — Compile repositories for machine attention",
-    description: "Lazy semantic context with an exact-source path before every write.",
+    description: "Lazy semantic context for large codebases, with an exact-source path before every write.",
     images: ["https://enoch3712.github.io/KERN/kern-social.png"],
   },
 };
