@@ -400,5 +400,22 @@ class TestEmit(unittest.TestCase):
         self.assertIn("IF open > UserDetails", il)
 
 
+@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+class TestNoOpOnPlainCode(unittest.TestCase):
+    PLAIN = ('import { readFile } from "fs/promises";\n\n'
+             "export async function load(url) {\n"
+             "  const data = await readFile(url);\n"
+             "  if (!data) {\n    throw new Error(url);\n  }\n"
+             "  return data.toString();\n}\n")
+
+    def test_component_kind_absent_and_frontend_plain(self):
+        mod = kern_compile.parse_tsjs(self.PLAIN, dialect="js")
+        self.assertEqual(mod.frontend, "tree-sitter")
+        self.assertFalse(any(s.kind == "component" for s in mod.symbols))
+        il = kern_compile.emit_il(mod, "src/load.js", "c" * 64, "none", "L2")
+        self.assertNotIn("COMPONENT", il)
+        self.assertIn("frontend=tree-sitter tier=L2", il)
+
+
 if __name__ == "__main__":
     unittest.main()
