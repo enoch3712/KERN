@@ -25,13 +25,18 @@ export const metadata = {
     type: "website",
     url: "./",
     siteName: "KERN",
-    images: [{ url: "https://enoch3712.github.io/KERN/kern-social.png", width: 1200, height: 630, alt: "KERN — 12.75× smaller selected representation in the pilot" }],
+    images: [{
+      url: "https://enoch3712.github.io/KERN/kern-og-v2.png",
+      width: 1200,
+      height: 630,
+      alt: "KERN — Compile large codebases for machine attention. Exact source before every write.",
+    }],
   },
   twitter: {
     card: "summary_large_image",
     title: "KERN — Compile repositories for machine attention",
     description: "Lazy semantic context for large codebases, with an exact-source path before every write.",
-    images: ["https://enoch3712.github.io/KERN/kern-social.png"],
+    images: ["https://enoch3712.github.io/KERN/kern-og-v2.png"],
   },
 };
 
