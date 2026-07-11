@@ -51,6 +51,16 @@ class TestTokenBench(unittest.TestCase):
         row = token_bench.bench_file(bad)
         self.assertIn("error", row)
 
+    def test_fidelity_not_fooled_by_substring(self):
+        f = self.tmp / "sub.py"
+        f.write_text(
+            '"""Doc."""\n\n' + "\n\n".join(
+                f'def helper_{i}(x):\n    return format(x)\n' for i in range(40)
+            )
+        )
+        row = token_bench.bench_file(f)
+        self.assertEqual(row["fidelity_missing"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

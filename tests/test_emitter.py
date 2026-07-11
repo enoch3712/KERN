@@ -101,6 +101,25 @@ class TestEmitter(unittest.TestCase):
         self.assertIn("os @L1-1", import_lines[0])
         self.assertIn("sys @L8-8", import_lines[1])
 
+    def test_l3_keeps_compound_expression_calls(self):
+        src = (
+            "def combine(a, b):\n"
+            "    total = compute_one(a) + compute_two(b)\n"
+            "    return total\n"
+        )
+        mod = kern_compile.parse_python(src)
+        il3 = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L3")
+        self.assertIn("compute_one", il3)
+        self.assertIn("compute_two", il3)
+        il3_dup = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L3")
+        self.assertEqual(il3, il3_dup)
+
+    def test_l3_omits_calls_already_in_flow(self):
+        mod = kern_compile.parse_python(SAMPLE)
+        il3 = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L3")
+        f_block = il3.split("F load_entry")[1].split("\n\n")[0]
+        self.assertNotIn("CALLS path.read_bytes", f_block)
+
 
 if __name__ == "__main__":
     unittest.main()

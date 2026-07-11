@@ -395,10 +395,18 @@ def _function_lines(s: Symbol, level: int, tier: str, faults: list) -> list:
              f"@L{s.span[0]}-{s.span[1]} ^{s.slice8} ~{tier}"]
     if s.decorators:
         lines.append("  DECORATORS " + ", ".join(s.decorators))
-    if s.calls and level <= 2:
-        shown = s.calls[:25]
-        extra = f" …+{len(s.calls) - 25}" if len(s.calls) > 25 else ""
-        lines.append("  CALLS " + ", ".join(shown) + extra)
+    if level <= 2:
+        if s.calls:
+            shown = s.calls[:25]
+            extra = f" …+{len(s.calls) - 25}" if len(s.calls) > 25 else ""
+            lines.append("  CALLS " + ", ".join(shown) + extra)
+    else:
+        covered = "\n".join(op.detail for op in s.flow)
+        leftover = [c for c in s.calls if c not in covered]
+        if leftover:
+            shown = leftover[:25]
+            extra = f" …+{len(leftover) - 25}" if len(leftover) > 25 else ""
+            lines.append("  CALLS " + ", ".join(shown) + extra)
     effects = _render_provenanced(s.effects, s.unknown_calls)
     if effects:
         lines.append("  EFFECTS " + effects)

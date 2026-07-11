@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -27,7 +28,11 @@ def bucket(tokens: int) -> str:
 def fidelity_missing(module, il: str) -> list[str]:
     missing = []
     for symbol in module.symbols:
-        if symbol.kind == "function" and symbol.name.split(".")[-1] not in il:
+        if symbol.kind != "function":
+            continue
+        tail = symbol.name.split(".")[-1]
+        pattern = rf"^(?:ASYNC )?F .*{re.escape(tail)}\("
+        if re.search(pattern, il, re.MULTILINE) is None:
             missing.append(symbol.name)
     return missing
 
