@@ -6,6 +6,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+# Safe: kern_compile imports kern_react only lazily inside functions, so there
+# is no cycle at module-exec time.
+from kern_compile import SECRET_NAME, _render_provenanced, flow_lines, sanitize_string
+
 JSX_TYPES = {"jsx_element", "jsx_self_closing_element", "jsx_fragment"}
 HOOK_RE = re.compile(r"^use[A-Z]\w*$")
 COMPONENT_NAME_RE = re.compile(r"^[A-Z]")
@@ -468,6 +472,15 @@ def _kept(nodes, level):
     return out
 
 
+def _hook_call_op(op) -> bool:
+    """True for CALL flow ops whose callee is a hook: already surfaced as
+    STATE/CTX/REF/HOOK/EFFECT lines, so they must not duplicate as flow ops."""
+    if op.op != "CALL":
+        return False
+    callee = op.detail.split("(")[0].strip()
+    return bool(HOOK_RE.match(callee.split(".")[-1]))
+
+
 def component_lines(s, level, tier, faults):
     lines = [f"COMPONENT {s.name}({s.signature}) @L{s.span[0]}-{s.span[1]} ^{s.slice8} ~{tier}"]
     if level == 1:
@@ -491,6 +504,12 @@ def component_lines(s, level, tier, faults):
                 lines.append("  " * (op.depth + 2) + piece)
     for e in r.get("events", []):
         lines.append(f"  EVENT {e.target} -> {e.action}")
+    effects = _render_provenanced(s.effects, s.unknown_calls)
+    if effects:
+        lines.append("  EFFECTS " + effects)
+    if level >= 3 and s.flow:
+        body_ops = [op for op in s.flow if not _hook_call_op(op)]
+        lines.extend(flow_lines(s, level, tier, faults, ops=body_ops))
     for risk, line in r.get("faults", []):
         lines.append(f"  !FAULT({risk}) @L{line}")
         faults.append(f"{risk}(L{line})")

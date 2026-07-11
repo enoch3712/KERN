@@ -460,26 +460,34 @@ def _function_lines(s: Symbol, level: int, tier: str, faults: list) -> list:
     if raises:
         lines.append("  RAISES " + raises)
     if level >= 2:
-        for op in s.flow:
-            # L2 is structure-only: bare CALL carries no name (CALLS has them),
-            # so only risk-tagged calls earn a line at this tier.
-            if level == 2 and op.op == "CALL" and not op.risk:
-                continue
-            pad = "  " * (op.depth + 2)
-            piece = op.op
-            if level == 3 and op.detail:
-                piece += f" {op.detail}"
-            elif level == 2 and op.op in ("CATCH", "NESTED", "CASE") and op.detail:
-                piece += f" {op.detail}"
-            if level == 3 and op.binds:
-                piece += f" -> {op.binds}"
-            risk = op.risk
-            if not risk and level == 3 and any(m in op.detail for m in _ELIDED):
-                risk = "elided-literal"
-            if risk:
-                piece += f" !FAULT({risk})"
-                faults.append(f"{risk}(L{op.line})")
-            lines.append(pad + piece)
+        lines.extend(flow_lines(s, level, tier, faults))
+    return lines
+
+
+def flow_lines(s: Symbol, level: int, tier: str, faults: list, ops=None) -> list:
+    """Render flow ops at the given tier. `ops` overrides `s.flow` so callers
+    (the React adapter) can pre-filter without copying the symbol."""
+    lines = []
+    for op in (s.flow if ops is None else ops):
+        # L2 is structure-only: bare CALL carries no name (CALLS has them),
+        # so only risk-tagged calls earn a line at this tier.
+        if level == 2 and op.op == "CALL" and not op.risk:
+            continue
+        pad = "  " * (op.depth + 2)
+        piece = op.op
+        if level == 3 and op.detail:
+            piece += f" {op.detail}"
+        elif level == 2 and op.op in ("CATCH", "NESTED", "CASE") and op.detail:
+            piece += f" {op.detail}"
+        if level == 3 and op.binds:
+            piece += f" -> {op.binds}"
+        risk = op.risk
+        if not risk and level == 3 and any(m in op.detail for m in _ELIDED):
+            risk = "elided-literal"
+        if risk:
+            piece += f" !FAULT({risk})"
+            faults.append(f"{risk}(L{op.line})")
+        lines.append(pad + piece)
     return lines
 
 

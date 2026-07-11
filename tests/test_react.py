@@ -399,6 +399,36 @@ class TestEmit(unittest.TestCase):
         il = self.il("L2", src)
         self.assertIn("IF open > UserDetails", il)
 
+    def test_l3_component_body_flow_visible(self):
+        src = ("function Card({ items, loading }) {\n"
+               "  const total = computeTotal(items);\n"
+               "  if (loading) { return <Spinner />; }\n"
+               "  return <div>{total}</div>;\n}\n")
+        il = self.il("L3", src)
+        self.assertIn("computeTotal", il)
+        self.assertIn("IF loading", il)
+        self.assertIn("Spinner", il)   # guard render visible via RET flow op
+
+    def test_l2_component_effects_line(self):
+        # No TSJS call classifies into a named effect class today; the
+        # unknown-calls counter still renders, so EFFECTS must appear.
+        src = ("function T() {\n"
+               "  useEffect(() => { fetch('/api'); }, []);\n"
+               "  console.log('x');\n"
+               "  return <div />;\n}\n")
+        il = self.il("L2", src)
+        self.assertIn("EFFECTS", il)
+        self.assertIn("unknown-calls=", il)
+
+    def test_l3_hook_calls_not_duplicated_as_flow_ops(self):
+        # useState appears once as STATE, not again as a CALL flow op.
+        src = ("function T() {\n"
+               "  const [open, setOpen] = useState(false);\n"
+               "  return <div />;\n}\n")
+        il = self.il("L3", src)
+        self.assertEqual(il.count("useState"), 0)   # STATE open=false covers it
+        self.assertIn("STATE open=false", il)
+
 
 @unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
 class TestNoOpOnPlainCode(unittest.TestCase):
