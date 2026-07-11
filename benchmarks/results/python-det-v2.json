@@ -2,22 +2,22 @@
   "estimator": "chars/4",
   "files": [
     {
-      "bucket": "medium(2k-10k)",
+      "bucket": "large(>10k)",
       "fidelity_missing": [],
       "file": "skills/kern/scripts/kern_cache.py",
-      "source_tokens": 9150,
+      "source_tokens": 10612,
       "tiers": {
         "L1": {
-          "ratio": 2.74,
-          "tokens": 3336
+          "ratio": 2.92,
+          "tokens": 3639
         },
         "L2": {
-          "ratio": 1.95,
-          "tokens": 4686
+          "ratio": 2.32,
+          "tokens": 4578
         },
         "L3": {
-          "ratio": 1.11,
-          "tokens": 8249
+          "ratio": 1.15,
+          "tokens": 9255
         }
       }
     }

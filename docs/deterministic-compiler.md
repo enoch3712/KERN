@@ -347,6 +347,22 @@ Two conclusions:
 Redaction verified on the same run: a hardcoded `s2_…` API key present in the
 source appears nowhere in the IL (6 `<REDACTED …>` markers emitted).
 
+### Shipped emitter, measured on the same file
+
+The table above is the design-phase prototype. The shipped `kern-det/0.2`
+emitter keeps more facts per page (`CALLS` names at L1/L2, per-symbol slice
+hashes, `EFFECTS` provenance) and emits, at L2, only risk-tagged `CALL` flow
+lines — a bare `CALL` carries no name, so structure-only tiers skip it:
+
+| Tier | Tokens | Compression |
+|---|---:|---:|
+| L1 | 5,451 | **8.6×** |
+| L2 | 8,130 | **5.8×** |
+| L3 | 25,817 | 1.8× |
+
+L3 is larger than the prototype because it preserves full `CALL expr -> var`
+dataflow with real expressions instead of truncating them.
+
 ### On micro-compressing keywords
 
 Replacing IL keywords with shorter codes (`CALLS` → `K`, `EFFECTS` → `E`) is

@@ -59,6 +59,23 @@ class TestEmitter(unittest.TestCase):
         self.assertIn("RAISE", joined)
         self.assertNotIn("not data", joined)
 
+    def test_tier_l2_drops_bare_call_keeps_risky_call(self):
+        src = (
+            "import hashlib\n\n"
+            "def f(x):\n"
+            "    a = helper(x)\n"
+            "    d = hashlib.sha1(x).digest()\n"
+            "    return a\n"
+        )
+        mod = kern_compile.parse_python(src)
+        il = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L2")
+        flow = [l.strip() for l in il.splitlines() if l.startswith("    ")]
+        self.assertNotIn("CALL", flow)
+        self.assertIn("CALL !FAULT(crypto)", flow)
+        self.assertIn("CALLS", il)
+        l3 = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L3")
+        self.assertIn("CALL helper(x) -> a", l3)
+
     def test_tier_l3_flow_with_expressions_and_binds(self):
         il = emit("L3")
         self.assertIn("CALL path.read_bytes() -> data", il)

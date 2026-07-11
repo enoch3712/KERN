@@ -460,6 +460,10 @@ def _function_lines(s: Symbol, level: int, tier: str, faults: list) -> list:
         lines.append("  RAISES " + raises)
     if level >= 2:
         for op in s.flow:
+            # L2 is structure-only: bare CALL carries no name (CALLS has them),
+            # so only risk-tagged calls earn a line at this tier.
+            if level == 2 and op.op == "CALL" and not op.risk:
+                continue
             pad = "  " * (op.depth + 2)
             piece = op.op
             if level == 3 and op.detail:
