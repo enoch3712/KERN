@@ -79,6 +79,11 @@ class TestEnrichmentAppendOnly(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.commit(staged)
 
+    def test_enrichment_header_with_secret_rejected(self):
+        staged = self.baseline + "\nENRICHMENT model=ghp_abcdefghijklmnop1234\nINTENT fn_0: fine\n"
+        with self.assertRaises(ValueError):
+            self.commit(staged)
+
 
 if __name__ == "__main__":
     unittest.main()

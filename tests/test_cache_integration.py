@@ -66,6 +66,25 @@ class TestCacheIntegration(unittest.TestCase):
         il = Path(self.ensure("big.py")["ir"]).read_text()
         self.assertIn("repo_revision=", il)
 
+    def test_generic_ir_line_numbers_use_newline_math(self):
+        # A form feed (\x0c) is a line boundary for str.splitlines() but not for
+        # a plain "\n" split; generic_ir's line numbers must match the latter
+        # (the same \n-only math fault_source uses) or "N|" refs point at the
+        # wrong source line whenever a file contains such control characters.
+        content = (
+            "#!/bin/sh\n# \x0c\n"
+            + ("echo filler\n" * 400)
+            + "if true; then\n  echo a\nfi\n"
+        )
+        (self.root / "notpython.sh").write_text(content)
+        il = Path(self.ensure("notpython.sh")["ir"]).read_text()
+        self.assertIn("mode=generic-line-baseline", il)
+        line_refs = [l for l in il.splitlines() if l and l[0].isdigit()]
+        ref = next(l for l in line_refs if "if true" in l)
+        n = int(ref.split("|")[0])
+        raw_lines = (self.root / "notpython.sh").read_text().split("\n")
+        self.assertIn("if true", raw_lines[n - 1])
+
 
 if __name__ == "__main__":
     unittest.main()
