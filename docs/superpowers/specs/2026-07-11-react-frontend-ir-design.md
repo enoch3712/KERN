@@ -3,6 +3,8 @@
 **Date:** 2026-07-11
 **Scope:** TSX/JSX grammar routing fix + React semantic extraction (Stage 1 MVP). Next.js adapter, type enrichment, and other frameworks are later specs.
 
+> **Historical note:** this spec predates the compiler-hardening merge from main. The shipped implementation adopts main's `parse_tsjs(text, typescript=, tsx=)` boolean API instead of the `dialect` parameter described below; the semantic vocabulary, tiers, and faulting are as specified. Current behavior: `docs/deterministic-compiler.md`.
+
 ## Problem
 
 KERN-IL/0.2 lowers TS/JS through Tree-sitter, but:
