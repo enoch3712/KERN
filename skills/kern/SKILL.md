@@ -116,6 +116,12 @@ python3 <skill-root>/scripts/kern_cache.py --repo <repo> status
 python3 <skill-root>/scripts/kern_cache.py --repo <repo> paths path/to/file
 ```
 
+To show recent KERN activity, run the operation log:
+
+```bash
+python3 <skill-root>/scripts/kern_cache.py --repo <repo> log --tail 20
+```
+
 If parsing fails, use the generic baseline, record the limitation, and fault raw source. If Pillow is unavailable, retain textual IL and report the renderer dependency rather than installing packages without permission.
 
 The cache mirrors repository paths under:

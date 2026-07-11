@@ -140,6 +140,7 @@ def cache_paths(root: Path) -> dict[str, Path]:
         "images": cache / "images",
         "jobs": cache / "jobs",
         "staging": cache / "staging",
+        "log": cache / "log.jsonl",
     }
 
 
@@ -854,6 +855,93 @@ def verify_symbol(root: Path, paths: dict[str, Path], relative: str, source: Pat
             "candidates": [{"span": span_of(m), "hash": m.slice8} for m in matches]}
 
 
+def log_event(paths: dict[str, Path], entry: dict[str, Any]) -> None:
+    """Append one JSON line to the operation log. Never raises."""
+    try:
+        with paths["log"].open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def log_fields_from_result(result: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key in ("source_rel", "status", "result", "reason", "counts"):
+        if key in result:
+            fields[key] = result[key]
+    return fields
+
+
+def ensure_log_fields(
+    paths: dict[str, Path], relative: str, source: Path, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Extra telemetry for the ensure command: tier and cheap token estimates."""
+    fields: dict[str, Any] = {}
+    try:
+        tier = result.get("tier")
+        if tier is None:
+            manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+            record = manifest.get("files", {}).get(relative, {})
+            tier = record.get("ir_tier")
+        if tier is not None:
+            fields["tier"] = tier
+    except (OSError, json.JSONDecodeError):
+        pass
+    try:
+        fields["source_tokens"] = source.stat().st_size // 4
+    except OSError:
+        pass
+    try:
+        artifacts = artifact_paths(paths, relative)
+        fields["il_tokens"] = artifacts["ir"].stat().st_size // 4
+    except OSError:
+        pass
+    return fields
+
+
+def read_log_entries(paths: dict[str, Path], tail: int, op_filter: str | None) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    try:
+        with paths["log"].open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if op_filter and entry.get("op") != op_filter:
+                    continue
+                entries.append(entry)
+    except OSError:
+        return []
+    if tail is not None and tail >= 0:
+        entries = entries[-tail:]
+    return entries
+
+
+def print_log(entries: list[dict[str, Any]], as_json: bool) -> None:
+    if not entries:
+        print("no log entries")
+        return
+    if as_json:
+        for entry in entries:
+            print(json.dumps(entry, sort_keys=True))
+        return
+    print(f"{'TS':<21} {'OP':<8} {'FILE':<32} {'STATUS/RESULT':<14} {'MS':>8}")
+    for entry in entries:
+        ts = str(entry.get("ts", "-"))
+        op = str(entry.get("op", "-"))
+        file_ = str(entry.get("source_rel", "-"))
+        status = entry.get("status") or entry.get("result") or "-"
+        duration = entry.get("duration_ms")
+        ms = str(duration) if isinstance(duration, int) else "-"
+        print(f"{ts:<21} {op:<8} {file_:<32} {str(status):<14} {ms:>8}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".", help="Repository root (default: current directory)")
@@ -888,14 +976,22 @@ def parse_args() -> argparse.Namespace:
     verify.add_argument("--symbol", required=True)
     verify.add_argument("--hash", required=True)
     verify.add_argument("--span")
+    log_cmd = sub.add_parser("log")
+    log_cmd.add_argument("--tail", type=int, default=20)
+    log_cmd.add_argument("--op")
+    log_cmd.add_argument("--json", action="store_true")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    paths: dict[str, Path] | None = None
+    started = time.monotonic()
     try:
         root = repo_root(args.repo)
         paths, config = initialize(root)
+        relative: str | None = None
+        source: Path | None = None
         if args.command == "init":
             result = {"ok": True, "operation": "init", "repo": str(root), "cache": str(paths["cache"])}
         elif args.command == "scan":
@@ -904,6 +1000,10 @@ def main() -> int:
             result = status(root, paths)
         elif args.command == "sync":
             result = sync_cache(root, paths, config, args.eager, args.limit)
+        elif args.command == "log":
+            entries = read_log_entries(paths, args.tail, args.op)
+            print_log(entries, args.json)
+            return 0
         else:
             relative, source = normalize_rel(root, args.file)
             if args.command == "ensure":
@@ -918,6 +1018,18 @@ def main() -> int:
                 result = render_file(root, paths, config, relative, source, args.profile)
             elif args.command == "fault":
                 sys.stdout.write(fault_source(source, relative, args.start, args.end, args.expect_sha))
+                log_event(
+                    paths,
+                    {
+                        "ts": now_iso(),
+                        "op": "fault",
+                        "source_rel": relative,
+                        "start": args.start,
+                        "end": args.end,
+                        "ok": True,
+                        "duration_ms": int((time.monotonic() - started) * 1000),
+                    },
+                )
                 return 0
             elif args.command == "verify":
                 result = verify_symbol(root, paths, relative, source, args.symbol, args.hash, args.span)
@@ -925,8 +1037,28 @@ def main() -> int:
                 raise RuntimeError(f"Unknown command: {args.command}")
         json.dump(result, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
+        entry = {
+            "ts": now_iso(),
+            "op": args.command,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+            "ok": True,
+        }
+        entry.update(log_fields_from_result(result))
+        if args.command == "ensure" and relative is not None and source is not None:
+            entry.update(ensure_log_fields(paths, relative, source, result))
+        log_event(paths, entry)
         return 0
     except Exception as exc:
+        if paths is not None:
+            log_event(
+                paths,
+                {
+                    "ts": now_iso(),
+                    "op": getattr(args, "command", "?"),
+                    "ok": False,
+                    "error": str(exc),
+                },
+            )
         json.dump({"ok": False, "error": str(exc), "type": exc.__class__.__name__}, sys.stderr, indent=2)
         sys.stderr.write("\n")
         return 2
