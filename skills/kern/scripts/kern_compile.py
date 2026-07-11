@@ -425,6 +425,184 @@ def _function_lines(s: Symbol, level: int, tier: str, faults: list) -> list:
     return lines
 
 
+def tsjs_available() -> bool:
+    try:
+        import tree_sitter            # noqa: F401
+        import tree_sitter_javascript  # noqa: F401
+        import tree_sitter_typescript  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+_TS_FLOW = {
+    "if_statement": "IF", "for_statement": "LOOP", "for_in_statement": "LOOP",
+    "while_statement": "WHILE", "do_statement": "WHILE", "try_statement": "TRY",
+    "return_statement": "RET", "throw_statement": "RAISE", "switch_statement": "MATCH",
+}
+_TS_FUNC_NODES = {"function_declaration", "generator_function_declaration", "method_definition"}
+
+
+def parse_tsjs(text: str, typescript: bool = False) -> ModuleIR:
+    from tree_sitter import Language, Parser
+    if typescript:
+        import tree_sitter_typescript as ts_lang
+        language = Language(ts_lang.language_typescript())
+        lang_name = "typescript"
+    else:
+        import tree_sitter_javascript as js_lang
+        language = Language(js_lang.language())
+        lang_name = "javascript"
+    parser = Parser(language)
+    tree = parser.parse(text.encode("utf-8"))
+    raw = text.encode("utf-8")
+
+    def ntext(n, cap=120):
+        piece = raw[n.start_byte:n.end_byte].decode("utf-8", "replace")
+        piece = SPACE.sub(" ", piece).strip()
+        if SECRET_VALUE.search(piece):
+            return sanitize_string(piece, secret_hint=True)
+        return piece[:cap]
+
+    def span(n):
+        return (n.start_point[0] + 1, n.end_point[0] + 1)
+
+    def field_node(n, name):
+        return n.child_by_field_name(name)
+
+    def collect_calls(n, acc):
+        if n.type == "call_expression":
+            fn = field_node(n, "function")
+            if fn is not None:
+                name = ntext(fn, 80)
+                if name not in acc:
+                    acc.append(name)
+        for c in n.children:
+            collect_calls(c, acc)
+
+    def collect_raises(n, acc):
+        if n.type == "throw_statement":
+            body = ntext(n, 80)
+            name = body.removeprefix("throw").strip().removeprefix("new").strip()
+            name = name.split("(")[0].rstrip(";").strip()
+            if name and name not in acc:
+                acc.append(name)
+        for c in n.children:
+            collect_raises(c, acc)
+
+    def flow(n, depth=0, budget=200):
+        ops = []
+
+        def add(node, op, detail="", binds=""):
+            if len(ops) < budget:
+                ops.append(FlowOp(op=op, detail=detail, binds=binds, depth=depth,
+                                  line=node.start_point[0] + 1))
+
+        for c in n.named_children:
+            if len(ops) >= budget:
+                break
+            t = c.type
+            if t in _TS_FLOW:
+                cond = field_node(c, "condition")
+                detail = ntext(cond, 100).strip("()") if cond is not None else ""
+                if t == "return_statement":
+                    detail = ntext(c, 100).removeprefix("return").strip().rstrip(";")
+                if t == "throw_statement":
+                    detail = ntext(c, 80).removeprefix("throw").strip().rstrip(";")
+                add(c, _TS_FLOW[t], detail)
+                for name in ("body", "consequence"):
+                    inner = field_node(c, name)
+                    if inner is not None:
+                        ops.extend(flow(inner, depth + 1, budget - len(ops)))
+                alt = field_node(c, "alternative")
+                if alt is not None:
+                    add(c, "ELSE")
+                    ops.extend(flow(alt, depth + 1, budget - len(ops)))
+                handler = field_node(c, "handler")
+                if handler is not None:
+                    param = field_node(handler, "parameter")
+                    if param is None:
+                        param = field_node(handler, "parameters")
+                    add(handler, "CATCH", ntext(param or handler, 40))
+                    hbody = field_node(handler, "body")
+                    if hbody is not None:
+                        ops.extend(flow(hbody, depth + 1, budget - len(ops)))
+            elif t == "expression_statement" and c.named_children and c.named_children[0].type in ("call_expression", "await_expression"):
+                add(c, "CALL", ntext(c.named_children[0], 120))
+            elif t in ("lexical_declaration", "variable_declaration"):
+                for d in c.named_children:
+                    if d.type == "variable_declarator":
+                        value = field_node(d, "value")
+                        if value is not None and value.type in ("call_expression", "await_expression"):
+                            name = field_node(d, "name")
+                            add(d, "CALL", ntext(value, 120), binds=ntext(name, 40) if name is not None else "")
+            else:
+                ops.extend(flow(c, depth, budget - len(ops)))
+        return ops[:budget]
+
+    def function_symbol(node, qualified):
+        calls, raises = [], []
+        collect_calls(node, calls)
+        collect_raises(node, raises)
+        params = field_node(node, "parameters")
+        rtype = field_node(node, "return_type")
+        body = field_node(node, "body")
+        a, b = span(node)
+        is_async = any(ch.type == "async" for ch in node.children)
+        return Symbol(
+            kind="function", name=qualified, span=(a, b),
+            signature=ntext(params, 200).strip("()") if params is not None else "",
+            returns=ntext(rtype, 60).lstrip(": ") if rtype is not None else "",
+            slice8=slice_sha8(text, a, b), calls=calls, raises=raises,
+            flow=flow(body) if body is not None else [], is_async=is_async,
+        )
+
+    symbols: list[Symbol] = []
+
+    def top(n, class_prefix=""):
+        for c in n.named_children:
+            t = c.type
+            if t in ("import_statement",):
+                symbols.append(Symbol(kind="import", name="", detail=ntext(c, 120), span=span(c)))
+            elif t in ("lexical_declaration", "variable_declaration") and not class_prefix:
+                for d in c.named_children:
+                    if d.type == "variable_declarator":
+                        name = field_node(d, "name")
+                        value = field_node(d, "value")
+                        if value is not None and value.type in ("arrow_function", "function_expression"):
+                            symbols.append(function_symbol(value, ntext(name, 60)))
+                        elif name is not None:
+                            detail = ntext(value, 100) if value is not None else ""
+                            hint = bool(SECRET_NAME.search(ntext(name, 60)))
+                            if hint:
+                                detail = sanitize_string(detail, secret_hint=True)
+                            symbols.append(Symbol(kind="const", name=ntext(name, 60), detail=detail, span=span(c)))
+            elif t in _TS_FUNC_NODES:
+                name = field_node(c, "name")
+                qual = (class_prefix + ntext(name, 60)) if name is not None else class_prefix + "<anonymous>"
+                symbols.append(function_symbol(c, qual))
+            elif t == "class_declaration":
+                name = field_node(c, "name")
+                cname = ntext(name, 60) if name is not None else "<anonymous>"
+                a, b = span(c)
+                symbols.append(Symbol(kind="class", name=cname, span=(a, b), slice8=slice_sha8(text, a, b)))
+                body = field_node(c, "body")
+                if body is not None:
+                    top(body, class_prefix=cname + ".")
+            elif t in ("export_statement", "program", "statement_block"):
+                top(c, class_prefix)
+    top(tree.root_node)
+
+    lines = text.splitlines()
+    omit = {
+        "docstrings": 0,
+        "comments": sum(1 for l in lines if l.strip().startswith("//")),
+        "blank": sum(1 for l in lines if not l.strip()),
+        "assignments": 0,
+    }
+    return ModuleIR(lang_name, "tree-sitter", symbols, omit)
+
+
 def emit_il(module: ModuleIR, source_rel: str, source_sha256: str,
             repo_revision: str = "none", tier: str = "L2") -> str:
     level = _TIER_LEVEL[tier]
