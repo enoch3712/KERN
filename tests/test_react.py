@@ -108,6 +108,15 @@ class TestComponentDetection(unittest.TestCase):
         self.assertEqual(mod.frontend, "tree-sitter")
         self.assertEqual(self.sym(mod, "parse").kind, "function")
 
+    def test_ternary_return_is_component(self):
+        mod = self.parse("function Card({ loading }) {\n"
+                         "  return loading ? <Spinner /> : <Content />;\n}\n")
+        self.assertEqual(self.sym(mod, "Card").kind, "component")
+
+    def test_logical_and_return_is_component(self):
+        mod = self.parse("const Hint = ({ ok }) => ok && <b>hi</b>;\n")
+        self.assertEqual(self.sym(mod, "Hint").kind, "component")
+
     def test_nested_return_jsx_in_inner_fn_not_component(self):
         src = ("function Outer() {\n"
                "  const inner = () => <div />;\n"
@@ -236,6 +245,21 @@ class TestRenderTree(unittest.TestCase):
         tags = [t for _, t, _ in self.flat(self.render(src))]
         self.assertIn("IF ok", tags)
         self.assertIn("ELSE", tags)
+
+    def test_ternary_return_lowered_to_if_else(self):
+        src = ("function Card({ loading }) {\n"
+               "  return loading ? <Spinner /> : <Content />;\n}\n")
+        tags = [t for _, t, _ in self.flat(self.render(src))]
+        self.assertIn("IF loading", tags)
+        self.assertIn("ELSE", tags)
+        self.assertIn("Spinner", tags)
+        self.assertIn("Content", tags)
+
+    def test_logical_and_return_lowered_to_if(self):
+        src = "const Hint = ({ ok }) => ok && <b>hi</b>;\n"
+        tags = [t for _, t, _ in self.flat(self.render(src))]
+        self.assertIn("IF ok", tags)
+        self.assertIn("b", tags)
 
     def test_dynamic_component_faulted(self):
         src = ("function T() {\n  return <Foo.Bar />;\n}\n")

@@ -51,13 +51,32 @@ def _unwrap_parens(n):
     return n
 
 
+def _jsx_bearing(u) -> bool:
+    """True for a JSX node, or a one-level conditional expression yielding JSX:
+    `cond ? <X/> : <Y/>` or `cond && <X/>`. One level only — deterministic."""
+    if u is None:
+        return False
+    if u.type in JSX_TYPES:
+        return True
+    if u.type == "ternary_expression":
+        cons = _unwrap_parens(u.child_by_field_name("consequence"))
+        alt = _unwrap_parens(u.child_by_field_name("alternative"))
+        return ((cons is not None and cons.type in JSX_TYPES)
+                or (alt is not None and alt.type in JSX_TYPES))
+    if u.type == "binary_expression":
+        op = u.child_by_field_name("operator")
+        right = _unwrap_parens(u.child_by_field_name("right"))
+        return (op is not None and op.type == "&&"
+                and right is not None and right.type in JSX_TYPES)
+    return False
+
+
 def _returns_jsx(fn_node) -> bool:
     body = fn_node.child_by_field_name("body")
     if body is None:
         return False
     if body.type != "statement_block":
-        u = _unwrap_parens(body)
-        return u is not None and u.type in JSX_TYPES
+        return _jsx_bearing(_unwrap_parens(body))
     stack = list(body.named_children)
     while stack:
         n = stack.pop()
@@ -65,8 +84,7 @@ def _returns_jsx(fn_node) -> bool:
             continue  # returns inside nested functions don't count
         if n.type == "return_statement":
             for ch in n.named_children:
-                u = _unwrap_parens(ch)
-                if u is not None and u.type in JSX_TYPES:
+                if _jsx_bearing(_unwrap_parens(ch)):
                     return True
         stack.extend(n.named_children)
     return False
@@ -409,7 +427,7 @@ def _extract_render(node, react, ntext, events_out):
     jsx_root = None
     if body.type != "statement_block":
         jsx_root = _unwrap_parens(body)
-        if jsx_root is not None and jsx_root.type not in JSX_TYPES:
+        if not _jsx_bearing(jsx_root):
             jsx_root = None
     else:
         best_line = -1
@@ -421,14 +439,18 @@ def _extract_render(node, react, ntext, events_out):
             if s.type == "return_statement":
                 for ch in s.named_children:
                     u = _unwrap_parens(ch)
-                    if u is not None and u.type in JSX_TYPES and s.start_point[0] > best_line:
+                    if _jsx_bearing(u) and s.start_point[0] > best_line:
                         best_line = s.start_point[0]
                         jsx_root = u   # textually last JSX-bearing return wins
             else:
                 stack.extend(s.named_children)
     if jsx_root is None:
         return
-    react["render"] = _lower_jsx(jsx_root, ntext, counter, events_out)
+    if jsx_root.type in JSX_TYPES:
+        react["render"] = _lower_jsx(jsx_root, ntext, counter, events_out)
+    else:
+        # ternary / `&&` return: _lower_expr lowers both shapes to IF/ELSE nodes
+        react["render"] = _lower_expr(jsx_root, ntext, counter, events_out, "")
     if counter.get("dropped"):
         react["render"].append(RenderNode(tag="…", risk="render-truncated",
                                           line=jsx_root.start_point[0] + 1))
