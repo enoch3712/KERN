@@ -1,12 +1,12 @@
 {
   "date": "2026-07-10",
   "source": {
-    "sha256": "3545e7a955fcc961907d66f077999917739a5f95cf02b97491dbfb01c579dd96",
+    "source_id": "redacted-pilot",
     "bytes": 188606,
     "characters": 188329,
     "lines": 3704,
     "o200k_text_tokens_estimate": 36674,
-    "security_note": "One hard-coded API credential was detected and redacted from all IR and image outputs."
+    "security_note": "Credential-like literals were redacted from all derived outputs."
   },
   "semantic_ir": {
     "characters_without_answer_key": 23176,
@@ -76,11 +76,11 @@
     "selection": "Five exact facts selected by the compression subagent and independently verified against raw source before testing",
     "answer_key_removed_before_rendering": true,
     "questions": [
-      "Minimum Abacus SDK version vector",
-      "Actual and contradictory documented PDF-render DPI defaults",
-      "Color-cache file-size and mtime recreation thresholds",
-      "Maximum color-analysis pages and workers",
-      "Remote PPTX retry attempts, initial backoff, and transient HTTP statuses"
+      "Minimum supported dependency version",
+      "Documented versus executed rendering defaults",
+      "Cache recreation thresholds",
+      "Page and worker limits",
+      "Retry attempts, initial backoff, and transient status handling"
     ],
     "limitation": "This is a small compressor-selected retrieval test, not an independent or patch-correctness benchmark."
   },
