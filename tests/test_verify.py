@@ -106,6 +106,24 @@ class TestVerify(unittest.TestCase):
                                      "load_entry", "00000000", None)
         self.assertEqual(r["source_sha256"], kern_cache.sha256_bytes(data))
 
+    def test_unicode_separator_cannot_fake_ok(self):
+        import kern_compile
+        src = 'X = "a b"\n\n\ndef load_entry(path):\n    return path.read_bytes()\n'
+        self.file.write_text(src)
+        mod = kern_compile.parse_python(src)
+        sym = next(s for s in mod.symbols if s.name == "load_entry")
+        self.file.write_text(src.replace("read_bytes()", "read_text()"))
+        rel, srcp = kern_cache.normalize_rel(self.root, "mod.py")
+        r = kern_cache.verify_symbol(self.root, self.paths, rel, srcp, "load_entry", sym.slice8, None)
+        self.assertEqual(r["result"], "stale")
+
+    def test_fault_source_immune_to_unicode_line_separators(self):
+        src = 'X = "a b"\n\n\ndef load_entry(path):\n    return path.read_bytes()\n'
+        self.file.write_text(src)
+        body = kern_cache.fault_source(self.file, "mod.py", 4, 5, None)
+        self.assertIn("def load_entry(path):", body)
+        self.assertIn("return path.read_bytes()", body)
+
 
 if __name__ == "__main__":
     unittest.main()

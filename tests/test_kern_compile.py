@@ -61,8 +61,9 @@ class TestPythonFrontend(unittest.TestCase):
     def test_slice_hash_matches_exact_source_lines(self):
         f = self.sym("load_entry")
         start, end = f.span
-        lines = SAMPLE.splitlines(keepends=True)
-        expected = hashlib.sha256("".join(lines[start - 1:end]).encode()).hexdigest()[:8]
+        lines = SAMPLE.split("\n")
+        segment = "\n".join(lines[start - 1:end]) + "\n"
+        expected = hashlib.sha256(segment.encode()).hexdigest()[:8]
         self.assertEqual(f.slice8, expected)
         self.assertEqual(SAMPLE.splitlines()[start - 1].strip(), "def load_entry(path: Path, expected_sha: str) -> dict:")
 
@@ -103,6 +104,19 @@ class TestPythonFrontend(unittest.TestCase):
         c = next(s for s in mod.symbols if s.name == "Ordered")
         self.assertEqual(c.span[0], 3)
         self.assertEqual(c.decorators, ["functools.total_ordering"])
+
+    def test_slice_hash_immune_to_unicode_line_separators(self):
+        # U+2028 LINE SEPARATOR inside a string literal is a single physical
+        # line to ast/tree-sitter (which only count "\n"), but str.splitlines()
+        # treats it as a line break too, shifting the hashed window so an
+        # edit to the function body below can go undetected.
+        src = 'X = "a b"\n\n\ndef f():\n    return 1\n'
+        mod = kern_compile.parse_python(src)
+        f1 = next(s for s in mod.symbols if s.name == "f")
+        changed = src.replace("return 1", "return 999")
+        mod2 = kern_compile.parse_python(changed)
+        f2 = next(s for s in mod2.symbols if s.name == "f")
+        self.assertNotEqual(f1.slice8, f2.slice8)
 
 
 FLOW_SAMPLE = '''

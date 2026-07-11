@@ -132,6 +132,22 @@ class TestEmitter(unittest.TestCase):
         self.assertIn("CALLS", f_block)
         self.assertIn("at", [c.strip() for c in f_block.split("CALLS")[1].splitlines()[0].split(",")])
 
+    def test_secret_parameter_defaults_redacted(self):
+        src = 'def connect(host, password="hunter2", api_key="abc123shortkey"):\n    return host\n'
+        mod = kern_compile.parse_python(src)
+        for tier in ("L1", "L2", "L3"):
+            il = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", tier)
+            self.assertNotIn("hunter2", il)
+            self.assertNotIn("abc123shortkey", il)
+            self.assertIn("password", il)
+
+    def test_annotation_only_const_has_no_fabricated_value(self):
+        src = "count: int\nNAME = 'x'\n\n\ndef f():\n    return count\n"
+        mod = kern_compile.parse_python(src)
+        il = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L2")
+        self.assertNotIn("count=None", il)
+        self.assertIn("count", il)
+
 
 if __name__ == "__main__":
     unittest.main()

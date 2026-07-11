@@ -593,6 +593,8 @@ def commit_file(
             for line in appended_lines[1:]:
                 if line.strip() and not line.startswith("INTENT "):
                     raise ValueError(f"Enrichment may only append INTENT lines, found: {line[:60]!r}")
+                if SECRET_VALUE.search(line):
+                    raise ValueError("Enrichment line contains a likely credential")
         payload = payload.rstrip(b"\n") + b"\n"
         atomic_write(artifacts["ir"], payload)
         if sha256_file(source) != expected_sha:
@@ -778,12 +780,17 @@ def fault_source(source: Path, relative: str, start: int | None, end: int | None
     if expected and expected != digest:
         raise RuntimeError(f"Source hash mismatch: expected {expected}, current {digest}")
     text = data.decode("utf-8", "strict")
-    lines = text.splitlines(keepends=True)
+    # Split on "\n" only, matching ast/tree-sitter line numbering; str.splitlines()
+    # also breaks on \v, \f, \x1c-\x1e, \x85, U+2028, U+2029, etc., which would
+    # silently return the wrong bytes for a requested line range.
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
     first = start or 1
     last = end or len(lines)
     if first < 1 or last < first or last > max(1, len(lines)):
         raise ValueError(f"Invalid line range {first}-{last}; file has {len(lines)} lines")
-    body = "".join(lines[first - 1 : last])
+    body = "\n".join(lines[first - 1 : last])
     if body and not body.endswith("\n"):
         body += "\n"
     return (

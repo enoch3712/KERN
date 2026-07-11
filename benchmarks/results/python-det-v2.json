@@ -5,19 +5,19 @@
       "bucket": "medium(2k-10k)",
       "fidelity_missing": [],
       "file": "skills/kern/scripts/kern_cache.py",
-      "source_tokens": 8789,
+      "source_tokens": 9150,
       "tiers": {
         "L1": {
-          "ratio": 2.64,
-          "tokens": 3331
+          "ratio": 2.74,
+          "tokens": 3336
         },
         "L2": {
-          "ratio": 1.9,
-          "tokens": 4619
+          "ratio": 1.95,
+          "tokens": 4686
         },
         "L3": {
-          "ratio": 1.1,
-          "tokens": 7989
+          "ratio": 1.11,
+          "tokens": 8249
         }
       }
     }

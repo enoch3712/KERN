@@ -27,8 +27,13 @@ def sha256_hex(data: bytes) -> str:
 
 
 def slice_sha8(source_text: str, start: int, end: int) -> str:
-    lines = source_text.splitlines(keepends=True)
-    return sha256_hex("".join(lines[start - 1:end]).encode("utf-8", "surrogatepass"))[:8]
+    # Split on "\n" only: ast/tree-sitter line numbers count "\n" exclusively,
+    # while str.splitlines() also breaks on \v, \f, \x1c-\x1e, \x85, U+2028,
+    # U+2029, etc. A source string containing one of those characters would
+    # silently shift the hashed window relative to the true line numbers.
+    lines = source_text.split("\n")
+    segment = "\n".join(lines[start - 1:end])
+    return sha256_hex((segment + "\n").encode("utf-8", "surrogatepass"))[:8]
 
 
 def sanitize_string(value: str, secret_hint: bool = False) -> str:
@@ -67,6 +72,36 @@ def expr_text(node: ast.AST | None, max_length: int = 200, secret_hint: bool = F
         digest = sha256_hex(rendered.encode())[:12]
         rendered = rendered[: max_length - 24] + f"…<sha256={digest}>"
     return rendered
+
+
+def _redact_secret_defaults(args_node: ast.arguments) -> ast.arguments:
+    """Deep-copy a function's parameter list and replace the default value of
+    any secret-named parameter (e.g. password="hunter2") with a redacted
+    placeholder, so literal secrets never appear in an emitted signature."""
+    clone = copy.deepcopy(args_node)
+
+    def redacted(default: ast.AST) -> ast.AST:
+        if isinstance(default, ast.Constant) and isinstance(default.value, str):
+            value = sanitize_string(default.value, secret_hint=True)
+        else:
+            value = "<REDACTED>"
+        return ast.copy_location(ast.Constant(value), default)
+
+    positional = clone.posonlyargs + clone.args
+    offset = len(positional) - len(clone.defaults)
+    for i, default in enumerate(clone.defaults):
+        if default is None:
+            continue
+        arg = positional[offset + i]
+        if arg is not None and SECRET_NAME.search(arg.arg or ""):
+            clone.defaults[i] = redacted(default)
+    for i, default in enumerate(clone.kw_defaults):
+        if default is None:
+            continue
+        arg = clone.kwonlyargs[i]
+        if arg is not None and SECRET_NAME.search(arg.arg or ""):
+            clone.kw_defaults[i] = redacted(default)
+    return clone
 
 
 def _target(node: ast.AST) -> str:
@@ -330,7 +365,7 @@ def _function_symbol(node, qualified: str, text: str) -> Symbol:
         kind="function",
         name=qualified,
         span=(start, end),
-        signature=expr_text(node.args, 200),
+        signature=expr_text(_redact_secret_defaults(node.args), 200),
         returns=expr_text(node.returns, 60) if node.returns else "",
         decorators=[expr_text(d, 60) for d in node.decorator_list],
         slice8=slice_sha8(text, start, end),
@@ -355,10 +390,17 @@ def parse_python(text: str) -> ModuleIR:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             names = ",".join(_target(t) for t in targets)
             hint = bool(SECRET_NAME.search(names))
-            symbol = Symbol(kind="const", name=names,
-                           detail=expr_text(node.value, 100, hint),
+            if isinstance(node, ast.AnnAssign) and node.value is None:
+                # Annotation-only declaration (e.g. `count: int`) has no value;
+                # emit the annotation, not a fabricated "=None".
+                detail = ": " + expr_text(node.annotation, 60)
+                risk_value = None
+            else:
+                detail = "=" + expr_text(node.value, 100, hint)
+                risk_value = node.value
+            symbol = Symbol(kind="const", name=names, detail=detail,
                            span=(node.lineno, node.end_lineno or node.lineno))
-            symbol.risk = expr_risk(node.value)
+            symbol.risk = expr_risk(risk_value)
             symbols.append(symbol)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             symbols.append(_function_symbol(node, node.name, text))
@@ -583,10 +625,14 @@ def parse_tsjs(text: str, typescript: bool = False) -> ModuleIR:
                         if value is not None and value.type in ("arrow_function", "function_expression"):
                             symbols.append(function_symbol(value, ntext(name, 60)))
                         elif name is not None:
-                            detail = ntext(value, 100) if value is not None else ""
-                            hint = bool(SECRET_NAME.search(ntext(name, 60)))
-                            if hint:
-                                detail = sanitize_string(detail, secret_hint=True)
+                            if value is not None:
+                                rendered = ntext(value, 100)
+                                hint = bool(SECRET_NAME.search(ntext(name, 60)))
+                                if hint:
+                                    rendered = sanitize_string(rendered, secret_hint=True)
+                                detail = "=" + rendered
+                            else:
+                                detail = ""
                             symbols.append(Symbol(kind="const", name=ntext(name, 60), detail=detail, span=span(c)))
             elif t in _TS_FUNC_NODES:
                 name = field_node(c, "name")
@@ -669,7 +715,7 @@ def emit_il(module: ModuleIR, source_rel: str, source_sha256: str,
             if s.risk:
                 tag = f" !FAULT({s.risk})"
                 faults.append(f"{s.risk}(L{s.span[0]})")
-            out.append(f"C {s.name}={s.detail} @L{s.span[0]}{tag}")
+            out.append(f"C {s.name}{s.detail} @L{s.span[0]}{tag}")
     for s in module.symbols:
         if s.kind == "class":
             out.extend(["", f"CLASS {s.name}({s.bases}) @L{s.span[0]}-{s.span[1]} ^{s.slice8}"])

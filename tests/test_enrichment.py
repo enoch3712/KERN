@@ -74,6 +74,11 @@ class TestEnrichmentAppendOnly(unittest.TestCase):
         self.assertTrue(data.endswith(b"\n"))
         self.assertFalse(data.endswith(b"\n\n"))
 
+    def test_intent_line_with_secret_rejected(self):
+        staged = self.baseline + "\nENRICHMENT model=test-model\nINTENT fn_0: uses key ghp_abcdefghijklmnop1234\n"
+        with self.assertRaises(ValueError):
+            self.commit(staged)
+
 
 if __name__ == "__main__":
     unittest.main()
