@@ -88,6 +88,11 @@ class TestOperationLogging(unittest.TestCase):
         out = kern_cache.redact_line("push rejected using ghp_ABCDEFGHIJKLMNOP12345 by client")
         self.assertNotIn("ghp_ABCDEFGHIJKLMNOP12345", out)
 
+    def test_redact_line_catches_bearer_header(self):
+        out = kern_cache.redact_line("Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig")
+        self.assertNotIn("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", out)
+        self.assertIn("REDACTED", out)
+
 
 class TestLogCommand(unittest.TestCase):
     def setUp(self):

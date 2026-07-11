@@ -47,6 +47,9 @@ SECRET_VALUE = re.compile(
     r"(?i)(?:sk|rk|pk|s2)[_-][A-Za-z0-9_-]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
     r"(?:aws|ghp|github_pat)_[A-Za-z0-9_-]{12,}"
 )
+SECRET_NAME = re.compile(
+    r"(?i)(api[_-]?key|access[_-]?key|auth|bearer|credential|passwd|password|private[_-]?key|secret|token)"
+)
 SECRET_ASSIGNMENT = re.compile(
     r"(?i)(api[_-]?key|access[_-]?key|auth|bearer|credential|passwd|password|private[_-]?key|secret|token)"
     r"['\"]?\s*[:=]\s*\S"
@@ -395,7 +398,7 @@ GENERIC_KEEP = re.compile(
 
 def redact_line(line: str) -> str:
     line = SECRET_VALUE.sub(lambda m: f"<REDACTED len={len(m.group(0))}>", line)
-    if SECRET_ASSIGNMENT.search(line):
+    if SECRET_NAME.search(line) and re.search(r"[:=]", line):
         digest = sha256_bytes(line.encode("utf-8", "replace"))[:12]
         left = re.split(r"[:=]", line, maxsplit=1)[0]
         return f"{left}=<REDACTED_LINE sha256={digest}>"
