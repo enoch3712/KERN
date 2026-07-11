@@ -369,10 +369,13 @@ def _event_action(value_node, setters, ntext):
         body = expr.child_by_field_name("body")
         body = _unwrap_parens(body)
         if body is not None and body.type == "statement_block":
-            calls = [c for c in body.named_children
-                     if c.type == "expression_statement" and c.named_children
-                     and c.named_children[0].type == "call_expression"]
-            body = calls[0].named_children[0] if len(calls) == 1 else None
+            stmts = body.named_children
+            if (len(stmts) == 1 and stmts[0].type == "expression_statement"
+                    and stmts[0].named_children
+                    and stmts[0].named_children[0].type == "call_expression"):
+                body = stmts[0].named_children[0]
+            else:
+                body = None
         if body is not None and body.type == "call_expression":
             callee = body.child_by_field_name("function")
             callee_txt = ntext(callee, 60) if callee is not None else ""

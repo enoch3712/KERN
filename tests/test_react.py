@@ -328,6 +328,21 @@ class TestEvents(unittest.TestCase):
         comp = next(s for s in mod.symbols if s.kind == "component")
         self.assertNotIn("_raw_events", comp.react)
 
+    def test_guarded_setter_not_lowered_to_unconditional_set(self):
+        src = ("function T() {\n"
+               "  const [open, setOpen] = useState(false);\n"
+               "  return <a onClick={() => { if (open) return; setOpen(true); }} />;\n}\n")
+        ev = self.events(src)
+        self.assertNotEqual(ev[0].action, "set open=true")
+        self.assertIn("if", ev[0].action)   # guard remains visible in the fallback text
+
+    def test_single_statement_setter_still_lowered(self):
+        src = ("function T() {\n"
+               "  const [open, setOpen] = useState(false);\n"
+               "  return <a onClick={() => { setOpen(true); }} />;\n}\n")
+        ev = self.events(src)
+        self.assertEqual(ev[0].action, "set open=true")
+
 
 if __name__ == "__main__":
     unittest.main()
