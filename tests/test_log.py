@@ -84,6 +84,30 @@ class TestOperationLogging(unittest.TestCase):
         log_contents = (self.root / ".kern" / "log.jsonl").read_text()
         self.assertNotIn("hunter2secretvalue", log_contents)
 
+    def test_invalid_utf8_error_and_log_do_not_echo_source_bytes(self):
+        secret = "hunter2secretvalue"
+        (self.root / "invalid.py").write_bytes(
+            f"PASSWORD={secret}\ndef run():\n    return 1\n".encode("utf-8") + b"\xff\n"
+        )
+        result = run_cli("--repo", str(self.root), "ensure", "invalid.py")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not valid UTF-8", result.stderr)
+        self.assertNotIn(secret, result.stderr)
+        log_contents = (self.root / ".kern" / "log.jsonl").read_text()
+        self.assertIn("not valid UTF-8", log_contents)
+        self.assertNotIn(secret, log_contents)
+
+    def test_partial_eager_sync_exits_one_and_logs_not_ok(self):
+        (self.root / "invalid.py").write_bytes(b"def run():\n    return 1\n\xff\n")
+        result = run_cli("--repo", str(self.root), "sync", "--eager")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertIs(payload["ok"], False)
+        self.assertTrue(payload["errors"])
+        entry = json.loads(self.log_lines()[-1])
+        self.assertEqual(entry["op"], "sync")
+        self.assertIs(entry["ok"], False)
+
     def test_redact_line_scrubs_value_without_delimiter(self):
         out = kern_cache.redact_line("push rejected using ghp_ABCDEFGHIJKLMNOP12345 by client")
         self.assertNotIn("ghp_ABCDEFGHIJKLMNOP12345", out)
@@ -92,6 +116,15 @@ class TestOperationLogging(unittest.TestCase):
         out = kern_cache.redact_line("Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig")
         self.assertNotIn("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", out)
         self.assertIn("REDACTED", out)
+
+    def test_log_event_does_not_follow_symlink(self):
+        paths, _ = kern_cache.initialize(self.root)
+        victim = self.root / "outside-log.jsonl"
+        victim.write_text("do not append\n")
+        paths["log"].symlink_to(victim)
+
+        kern_cache.log_event(paths, {"ts": "2026-01-01T00:00:00Z", "op": "verify", "ok": False})
+        self.assertEqual(victim.read_text(), "do not append\n")
 
 
 class TestLogCommand(unittest.TestCase):

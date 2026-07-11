@@ -81,14 +81,19 @@ Before editing any symbol read from IL or an image, verify its source-map handle
 
 ```bash
 python3 <skill-root>/scripts/kern_cache.py --repo <repo> verify path/to/file \
-  --symbol <qualified-name> --hash <slice-hash> [--span L<a>-L<b>]
+  --symbol <qualified-name> --hash <semantic-handle> [--span L<a>-L<b>]
 ```
 
 `ok` — proceed. `moved` — same bytes at a new span; use the returned span.
-`stale` — the symbol changed; the IL page is invalid, fault exact source.
+`stale` — the symbol or its same-file semantic context changed; the IL page is
+invalid, so fault exact source. `ok` and `moved` exit 0; `stale` returns
+`ok: false` and exits 1 so shell and JSON gates cannot treat it as passing.
 Lines tagged `!FAULT(reason)` (regex, crypto, math, concurrency, elided-literal) may not
 support a claim or an edit without an exact-source fault, regardless of verify.
-verify supports Python always and JavaScript/TypeScript when tree-sitter is installed; for other formats use fault with --expect-sha.
+verify supports Python always. JavaScript, TypeScript, and TSX are supported when
+their independently detected core+grammar capability is compatible; affected files
+fall back safely when a grammar is unavailable. For other formats use fault with
+--expect-sha.
 
 ```bash
 python3 <skill-root>/scripts/kern_cache.py --repo <repo> fault path/to/file \

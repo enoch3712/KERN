@@ -35,6 +35,8 @@ class TestTokenBench(unittest.TestCase):
         self.assertEqual(set(row["tiers"]), {"L1", "L2", "L3"})
         for tier in row["tiers"].values():
             self.assertGreater(tier["ratio"], 1.0)
+            self.assertIs(tier["fidelity_ok"], True)
+            self.assertEqual(tier["fidelity_missing"], [])
 
     def test_tier_ordering(self):
         row = token_bench.bench_file(self.f)
@@ -78,7 +80,76 @@ class TestTokenBench(unittest.TestCase):
             l for l in il.splitlines() if not l.startswith("F bar(")
         )
         missing = token_bench.fidelity_missing(module, il_without_bar)
-        self.assertIn("bar", missing)
+        self.assertTrue(any(item.startswith("bar@") and item.endswith(":header") for item in missing))
+
+    def test_fidelity_checks_semantic_facts_independently(self):
+        text = self.f.read_text()
+        module = token_bench.kern_compile.parse_python(text)
+        token_bench.kern_compile.propagate(module)
+        symbol = next(s for s in module.symbols if s.name == "fn_0")
+        il = token_bench.kern_compile.emit_il(module, "x.py", "0" * 64, "none", "L2")
+
+        cases = {
+            "signature": il.replace(
+                f"fn_0({symbol.signature})", "fn_0(definitely_wrong)", 1
+            ),
+            "returns": il.replace(
+                f") -> {symbol.returns or 'Any'} @L{symbol.span[0]}",
+                f") -> DefinitelyWrong @L{symbol.span[0]}",
+                1,
+            ),
+            "source-handle": il.replace(
+                f"^{token_bench.symbol_handle(symbol)}", "^deadbeefdeadbeef", 1
+            ),
+            "tier": il.replace("~L2", "~L1", 1),
+            "call": il.replace("path.read_bytes", "path.missing_read", 1),
+            "effect": il.replace("EFFECTS fs:read", "EFFECTS missing", 1),
+            "raise": il.replace("RAISES ValueError", "RAISES MissingError", 1),
+        }
+
+        for category, changed in cases.items():
+            with self.subTest(category=category):
+                missing = token_bench.fidelity_missing(module, changed, "L2")
+                self.assertTrue(
+                    any(f":{category}" in item for item in missing),
+                    f"expected {category} failure, got {missing}",
+                )
+
+    def test_fidelity_checks_class_source_handle(self):
+        source = "class Widget:\n    def run(self):\n        return 1\n"
+        module = token_bench.kern_compile.parse_python(source)
+        cls = next(s for s in module.symbols if s.kind == "class")
+        il = token_bench.kern_compile.emit_il(module, "x.py", "0" * 64, "none", "L2")
+        changed = il.replace(f"^{token_bench.symbol_handle(cls)}", "^deadbeefdeadbeef", 1)
+        missing = token_bench.fidelity_missing(module, changed, "L2")
+        self.assertTrue(any(item.startswith("Widget@") and item.endswith(":source-handle") for item in missing))
+
+    def test_call_fidelity_ignores_effect_provenance_but_accepts_l3_flow(self):
+        source = (
+            "def load(path):\n"
+            "    return path.read_bytes()\n\n"
+            "def caller(path):\n"
+            "    data = load(path)\n"
+            "    return transform(data)\n"
+        )
+        module = token_bench.kern_compile.parse_python(source)
+
+        l2 = token_bench.kern_compile.emit_il(module, "x.py", "0" * 64, "none", "L2")
+        self.assertIn("EFFECTS fs:read (via load)", l2)
+        l2_without_call = l2.replace("  CALLS load, transform\n", "  CALLS transform\n", 1)
+        missing = token_bench.fidelity_missing(module, l2_without_call, "L2")
+        self.assertTrue(any(item.endswith(":call:load") for item in missing), missing)
+
+        l3 = token_bench.kern_compile.emit_il(module, "x.py", "0" * 64, "none", "L3")
+        self.assertNotIn("  CALLS load", l3)
+        self.assertIn("CALL load(path) -> data", l3)
+        self.assertIn("RET transform(data)", l3)
+        self.assertFalse(token_bench.fidelity_missing(module, l3, "L3"))
+
+        l3_without_call = l3.replace("CALL load(path) -> data", "CALL missing(path) -> data", 1)
+        missing = token_bench.fidelity_missing(module, l3_without_call, "L3")
+        self.assertTrue(any(item.endswith(":call:load") for item in missing), missing)
+        self.assertFalse(any(item.endswith(":call:transform") for item in missing), missing)
 
 
 if __name__ == "__main__":

@@ -63,9 +63,16 @@ class TestPythonFrontend(unittest.TestCase):
         start, end = f.span
         lines = SAMPLE.split("\n")
         segment = "\n".join(lines[start - 1:end]) + "\n"
-        expected = hashlib.sha256(segment.encode()).hexdigest()[:8]
+        expected = hashlib.sha256(segment.encode()).hexdigest()[:kern_compile.HANDLE_HEX_LENGTH]
         self.assertEqual(f.slice8, expected)
         self.assertEqual(SAMPLE.splitlines()[start - 1].strip(), "def load_entry(path: Path, expected_sha: str) -> dict:")
+
+    def test_slice_hash_preserves_eof_newline_state(self):
+        without_newline = "def f():\n    return 1"
+        with_newline = without_newline + "\n"
+        first = next(s for s in kern_compile.parse_python(without_newline).symbols if s.name == "f")
+        second = next(s for s in kern_compile.parse_python(with_newline).symbols if s.name == "f")
+        self.assertNotEqual(first.slice8, second.slice8)
 
     def test_method_is_qualified_and_async(self):
         m = self.sym("Loader.fetch")
@@ -75,7 +82,7 @@ class TestPythonFrontend(unittest.TestCase):
         c = self.sym("StaleSource")
         self.assertEqual(c.kind, "class")
         self.assertEqual(c.bases, "Exception")
-        self.assertEqual(len(c.slice8), 8)
+        self.assertEqual(len(c.slice8), kern_compile.HANDLE_HEX_LENGTH)
 
     def test_secret_const_redacted(self):
         consts = [s for s in self.mod.symbols if s.kind == "const"]
@@ -117,6 +124,41 @@ class TestPythonFrontend(unittest.TestCase):
         mod2 = kern_compile.parse_python(changed)
         f2 = next(s for s in mod2.symbols if s.name == "f")
         self.assertNotEqual(f1.slice8, f2.slice8)
+
+    def test_semantic_handle_moves_with_symbol_but_stales_on_callee_change(self):
+        src = (
+            "def caller():\n"
+            "    return callee()\n\n\n"
+            "def callee():\n"
+            "    return 1\n"
+        )
+        original = kern_compile.apply_semantic_handles(kern_compile.parse_python(src))
+        moved = kern_compile.apply_semantic_handles(kern_compile.parse_python("# shifted\n" + src))
+        changed = kern_compile.apply_semantic_handles(
+            kern_compile.parse_python(src.replace("return 1", "return 2"))
+        )
+        old_caller = next(s for s in original.symbols if s.name == "caller")
+        moved_caller = next(s for s in moved.symbols if s.name == "caller")
+        changed_caller = next(s for s in changed.symbols if s.name == "caller")
+        self.assertEqual(old_caller.slice8, moved_caller.slice8)
+        self.assertEqual(old_caller.semantic8, moved_caller.semantic8)
+        self.assertNotEqual(old_caller.span, moved_caller.span)
+        self.assertEqual(old_caller.slice8, changed_caller.slice8)
+        self.assertNotEqual(old_caller.semantic8, changed_caller.semantic8)
+        self.assertEqual(len(old_caller.semantic8), kern_compile.HANDLE_HEX_LENGTH)
+
+    def test_nested_function_facts_do_not_leak_to_parent(self):
+        src = (
+            "def outer():\n"
+            "    def inner():\n"
+            "        audit(password='hunter2')\n"
+            "        raise RuntimeError('inner only')\n"
+            "    return 1\n"
+        )
+        outer = next(s for s in kern_compile.parse_python(src).symbols if s.name == "outer")
+        self.assertNotIn("audit", outer.calls)
+        self.assertNotIn("RuntimeError", outer.raises)
+        self.assertIn("NESTED", [op.op for op in outer.flow])
 
 
 FLOW_SAMPLE = '''

@@ -10,7 +10,7 @@ KERN applies the compiler/virtual-memory pattern to coding-agent context.
 4. Only the semantic working set is enriched and loaded.
 5. Exact current source must be faulted before an edit.
 6. A source change invalidates its prior IL and rendered pages.
-7. Every IL symbol carries a slice hash; a passing verify or fresh fault is required before that symbol is edited.
+7. Every IL symbol carries a contextual semantic handle backed by its exact slice and module dependencies; a passing verify or fresh fault is required before that symbol is edited.
 
 ## Lifecycle
 

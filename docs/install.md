@@ -5,8 +5,22 @@ KERN ships one canonical skill with native wrappers for Codex, Claude Code, and 
 ## Requirements
 
 - Git
-- Python 3.10 or newer
+- Python 3.10 or newer. The Python deterministic frontend uses only the standard library.
 - Optional: Pillow for dense WebP rendering (`python3 -m pip install Pillow`)
+
+The current deterministic JavaScript/TypeScript frontend is optional. Install its
+tested, mutually compatible parser set from the repository root:
+
+```bash
+python3 -m pip install --requirement requirements-compiler.txt
+```
+
+That file pins `tree-sitter==0.26.0`, `tree-sitter-javascript==0.25.0`, and
+`tree-sitter-typescript==0.23.2`. Capabilities are detected independently:
+JavaScript needs the core plus the JavaScript grammar, while TypeScript/TSX need
+the core plus the TypeScript grammar. A missing or ABI-incompatible grammar falls
+back only its affected file type to the labeled generic baseline; Python support
+is unaffected.
 
 KERN runs local scripts against repositories. Review third-party plugin code before installing it and use normal host sandbox/approval controls.
 

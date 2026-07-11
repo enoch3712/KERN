@@ -61,8 +61,8 @@ const memorySteps = [
 
 const languages = [
   { name: "Python", logo: "/logos/python.svg", support: "Structured" },
-  { name: "TypeScript", logo: "/logos/typescript.svg", support: "Generic" },
-  { name: "JavaScript", logo: "/logos/javascript.svg", support: "Generic" },
+  { name: "TypeScript", logo: "/logos/typescript.svg", support: "Structured" },
+  { name: "JavaScript", logo: "/logos/javascript.svg", support: "Structured" },
   { name: "Java", logo: "/logos/java.svg", support: "Generic" },
   { name: "Go", logo: "/logos/go.svg", support: "Generic" },
   { name: "Rust", logo: "/logos/rust.svg", support: "Generic", light: true },
@@ -216,7 +216,7 @@ export default function Home() {
       <div id="main-content">
         <section className="hero" id="top">
           <div className="hero-copy">
-            <p className="eyebrow">OPEN-SOURCE CONTEXT COMPILER FOR LARGE CODEBASES · v0.1.1</p>
+            <p className="eyebrow">OPEN-SOURCE CONTEXT COMPILER FOR LARGE CODEBASES · v0.2.0</p>
             <h1><em>12.75× smaller.</em><br />Exact source when it matters.</h1>
             <p className="hero-lede">Built for large codebases, KERN compiles repositories into a compact intermediate language, caches unchanged pages, and faults exact source back in before every edit.</p>
             <p className="pilot-qualifier">Selected-representation reduction in one 3,704-line Python pilot—not total agent-loop savings.</p>
@@ -267,7 +267,7 @@ export default function Home() {
           </div>
 
           <div className="install-terminal" id="install">
-            <div className="terminal-head"><span>KERN / QUICK INSTALL</span><strong>v0.1.1</strong></div>
+            <div className="terminal-head"><span>KERN / QUICK INSTALL</span><strong>v0.2.0</strong></div>
             <div className="install-tabs" role="tablist" aria-label="Installation environment">
               {environments.map((environment) => (
                 <button
@@ -310,7 +310,7 @@ export default function Home() {
           <div className={`compiler-workbench provider-${activeCompiler.id}`} id="compiler-panel" role="tabpanel" aria-labelledby={`compiler-tab-${activeCompiler.id}`}>
             <div className="workbench-bar">
               <Brand />
-              <span>src/cache.py</span>
+              <span>illustrative cache module</span>
               <span><i /> source hash 9c21… verified</span>
             </div>
 
@@ -327,7 +327,7 @@ export default function Home() {
                   <li><code>        <b>raise</b> StaleSource(path)</code></li>
                   <li><code>    <b>return</b> parse(data)</code></li>
                 </ol>
-                <footer><span>3,704 lines</span><strong>36,674 tokens est.</strong></footer>
+                <footer><span>FULL SOURCE</span><strong>authoritative bytes</strong></footer>
               </section>
 
               <section className="compile-pane" aria-label={`${activeCompiler.compiler} compiler status`}>
@@ -342,13 +342,13 @@ export default function Home() {
                   <span><i />bind source hash</span>
                 </div>
                 <div className="compile-meter"><i /></div>
-                <strong className="compile-ratio">6.33× <small>raw → IL</small></strong>
+                <strong className="compile-ratio">L2 <small>structure tier</small></strong>
               </section>
 
               <section className="code-pane il-pane" aria-labelledby="il-pane-title">
-                <header><span id="il-pane-title">COMPILED KERN IL</span><small>derived · cached</small></header>
-                <pre><code><b>KERN-IL/0.1</b>{`\n`}M cache source_sha256=9c21…{`\n`}F load_entry(path, expected_sha){`\n`}  READ path -&gt; data{`\n`}  CALL sha256(data) -&gt; current_sha{`\n`}  IF current_sha != expected_sha{`\n`}    RAISE StaleSource(path){`\n`}  RET parse(data){`\n`}SIDE fs:read{`\n`}QA exact-source-required{`\n`}OMIT syntax, comments, repetition</code></pre>
-                <footer><span>349 lines</span><strong>5,795 tokens est.</strong></footer>
+                <header><span id="il-pane-title">COMPILED KERN IL</span><small>abridged · derived · cached</small></header>
+                <pre><code><b>KERN-IL/0.2</b>{`\n`}source_rel=src/cache.py{`\n`}source_sha256=9c21…{`\n`}generator=kern-det/0.2 lang=python frontend=pyast tier=L2{`\n`}{`\n`}F load_entry(path, expected_sha) -&gt; Any @L3-8 ^e4b9095a64a4face ~L2{`\n`}  CALLS path.read_bytes, sha256(data).hexdigest, sha256, StaleSource, parse{`\n`}  EFFECTS fs:read, unknown-calls=4{`\n`}  RAISES StaleSource{`\n`}    IF{`\n`}      RAISE{`\n`}    RET{`\n`}{`\n`}OMIT assignments=2 blank=1 comments=0 docstrings=0 bodies-tier=L2{`\n`}FAULT-BEFORE edit(any), exact-literals</code></pre>
+                <footer><span>COMPACT WORKING SET</span><strong>derived · disposable</strong></footer>
               </section>
             </div>
 
@@ -476,7 +476,7 @@ export default function Home() {
         </section>
 
         <section className="languages section-pad" id="languages">
-          <div className="language-heading"><p className="eyebrow">RECOGNIZED SOURCE FORMATS</p><h2>Ten languages. One portable contract.</h2><p>Python has a structured baseline today. The remaining formats use KERN&apos;s generic experimental fallback while language-specific lowering matures.</p></div>
+          <div className="language-heading"><p className="eyebrow">RECOGNIZED SOURCE FORMATS</p><h2>Ten languages. One portable contract.</h2><p>Python is structured by default. JavaScript and TypeScript use the optional pinned tree-sitter frontends; the other seven formats use KERN&apos;s labeled generic baseline while language-specific lowering matures.</p></div>
           <div className="language-strip">
             {languages.map(({ name, logo, support, light }) => (
               <div className={light ? "language-logo light" : "language-logo"} key={name}>
