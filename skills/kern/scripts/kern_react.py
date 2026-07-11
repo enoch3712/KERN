@@ -358,6 +358,42 @@ def _lower_expr(n, ntext, counter, events_out, element_name):
     return [rn] if rn is not None else []
 
 
+def _event_action(value_node, setters, ntext):
+    expr = value_node
+    if expr.type == "jsx_expression":
+        expr = expr.named_children[0] if expr.named_children else None
+    expr = _unwrap_parens(expr)
+    if expr is None:
+        return ""
+    if expr.type in ("arrow_function", "function_expression"):
+        body = expr.child_by_field_name("body")
+        body = _unwrap_parens(body)
+        if body is not None and body.type == "statement_block":
+            calls = [c for c in body.named_children
+                     if c.type == "expression_statement" and c.named_children
+                     and c.named_children[0].type == "call_expression"]
+            body = calls[0].named_children[0] if len(calls) == 1 else None
+        if body is not None and body.type == "call_expression":
+            callee = body.child_by_field_name("function")
+            callee_txt = ntext(callee, 60) if callee is not None else ""
+            if callee_txt in setters:
+                args = body.child_by_field_name("arguments")
+                arg = args.named_children[0] if args is not None and args.named_children else None
+                arg_txt = ntext(arg, 60) if arg is not None else "undefined"
+                return f"set {setters[callee_txt]}={arg_txt}"
+            return callee_txt
+        return ntext(expr, 80)
+    return ntext(expr, 60)
+
+
+def _extract_events(react, ntext):
+    setters = react.get("setters", {})
+    for element, attr, value in react.pop("_raw_events", []):
+        action = _event_action(value, setters, ntext)
+        react["events"].append(EventUse(f"{element}.{attr}", action,
+                                        value.start_point[0] + 1))
+
+
 def _extract_render(node, react, ntext, events_out):
     body = node.child_by_field_name("body")
     if body is None:
@@ -413,6 +449,7 @@ def lower_components(fn_nodes, ntext, flow_fn) -> bool:
             sym.react["setters"] = {}
         raw_events = []
         _extract_render(node, sym.react, ntext, raw_events)
-        sym.react["_raw_events"] = raw_events   # consumed by Task 5
+        sym.react["_raw_events"] = raw_events
+        _extract_events(sym.react, ntext)
         upgraded = True
     return upgraded

@@ -299,5 +299,35 @@ class TestRenderTree(unittest.TestCase):
         self.assertIn("dynamic-component+spread-props", risks)
 
 
+@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+class TestEvents(unittest.TestCase):
+    def events(self, src):
+        mod = kern_compile.parse_tsjs(src, dialect="tsx")
+        comp = next(s for s in mod.symbols if s.kind == "component")
+        return comp.react["events"]
+
+    def test_setter_arrow_lowered(self):
+        ev = self.events(TSX_SAMPLE)
+        self.assertEqual([(e.target, e.action) for e in ev],
+                         [("Card.onClick", "set open=true")])
+
+    def test_handler_reference(self):
+        src = ("function T({ onSave }) {\n"
+               "  return <button onClick={onSave}>go</button>;\n}\n")
+        ev = self.events(src)
+        self.assertEqual((ev[0].target, ev[0].action), ("button.onClick", "onSave"))
+
+    def test_non_setter_arrow_uses_callee(self):
+        src = ("function T() {\n"
+               "  return <a onMouseEnter={() => analytics.track('x')} />;\n}\n")
+        ev = self.events(src)
+        self.assertEqual(ev[0].action, "analytics.track")
+
+    def test_raw_events_cleaned_up(self):
+        mod = kern_compile.parse_tsjs(TSX_SAMPLE, dialect="tsx")
+        comp = next(s for s in mod.symbols if s.kind == "component")
+        self.assertNotIn("_raw_events", comp.react)
+
+
 if __name__ == "__main__":
     unittest.main()
