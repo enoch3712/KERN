@@ -37,6 +37,11 @@ python3 <skill-root>/scripts/kern_cache.py --repo <repo> ensure path/to/file
 
 `ensure` immediately creates a deterministic baseline IL when the cache is absent or stale. It returns cache paths, the current source hash, and whether model enrichment is needed.
 
+`ensure` accepts `--tier L1|L2|L3` (default from config `default_tier`, `L2`).
+L1 = signatures + calls + effects + raises; L2 = + control-flow skeleton;
+L3 = + expressions and dataflow. Files below the `min_ir_tokens` floor get a
+`mode=source-cheaper` stub — read exact source instead.
+
 When enrichment is needed and a fast compiler subagent is available:
 
 1. Prepare a unique job and retain its JSON output:
@@ -72,6 +77,24 @@ Prefer the `dense` image profile: 10 px, four columns, lossless WebP. Do not use
 
 ## Fault exact source before edits
 
+Before editing any symbol read from IL or an image, verify its source-map handle:
+
+```bash
+python3 <skill-root>/scripts/kern_cache.py --repo <repo> verify path/to/file \
+  --symbol <qualified-name> --hash <semantic-handle> [--span L<a>-L<b>]
+```
+
+`ok` — proceed. `moved` — same bytes at a new span; use the returned span.
+`stale` — the symbol or its same-file semantic context changed; the IL page is
+invalid, so fault exact source. `ok` and `moved` exit 0; `stale` returns
+`ok: false` and exits 1 so shell and JSON gates cannot treat it as passing.
+Lines tagged `!FAULT(reason)` (regex, crypto, math, concurrency, elided-literal) may not
+support a claim or an edit without an exact-source fault, regardless of verify.
+verify supports Python always. JavaScript, TypeScript, and TSX are supported when
+their independently detected core+grammar capability is compatible; affected files
+fall back safely when a grammar is unavailable. For other formats use fault with
+--expect-sha.
+
 ```bash
 python3 <skill-root>/scripts/kern_cache.py --repo <repo> fault path/to/file \
   --start <line> --end <line> --expect-sha <manifest-sha>
@@ -96,6 +119,12 @@ This is KERN's lazy policy: repository-wide hashing, eager deterministic refresh
 ```bash
 python3 <skill-root>/scripts/kern_cache.py --repo <repo> status
 python3 <skill-root>/scripts/kern_cache.py --repo <repo> paths path/to/file
+```
+
+To show recent KERN activity, run the operation log:
+
+```bash
+python3 <skill-root>/scripts/kern_cache.py --repo <repo> log --tail 20
 ```
 
 If parsing fails, use the generic baseline, record the limitation, and fault raw source. If Pillow is unavailable, retain textual IL and report the renderer dependency rather than installing packages without permission.

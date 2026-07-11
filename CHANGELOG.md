@@ -2,6 +2,18 @@
 
 All notable changes to KERN are documented here.
 
+## 0.2.0 — 2026-07-11
+
+- Implement codec `kern-il/0.2` with deterministic tiered compiler (L1/L2/L3).
+- Add computed side effects and exception propagation through the IL.
+- Introduce `verify` CLI verb for source-map validation before edits.
+- Make stale verification fail shell/JSON gates and reject unsafe cache, manifest,
+  log, and renderer paths before filesystem mutation.
+- Implement size floor (`min_ir_tokens=600`) with `mode=source-cheaper` stubs.
+- Pin the tested optional JavaScript/TypeScript parser set and exercise it in PR CI.
+- Add per-tier token benchmarks with independent signature, call, effect, raise,
+  unknown-call, tier-marker, and source-handle fidelity checks.
+
 ## 0.1.1 — 2026-07-11
 
 - Enforce codec-version invalidation and reject stale rendered pages.

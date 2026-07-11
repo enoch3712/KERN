@@ -85,7 +85,7 @@ const workflow = [
 
 const safetyRules = [
   "Source is authoritative. KERN IL and dense pages are derived, disposable cache entries.",
-  "Validity follows the source SHA-256 and codec version, not the name of a model.",
+  "Validity follows the source SHA-256, codec version, and compiler fingerprint—not the name of a model.",
   "Credentials and high-entropy secrets are redacted from derived representations.",
   "A write changes the source hash and invalidates every prior representation of that file.",
 ];

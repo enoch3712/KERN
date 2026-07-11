@@ -13,6 +13,7 @@
 
 <p align="center">
   <a href="CHANGELOG.md"><img alt="Version" src="https://img.shields.io/github/package-json/v/enoch3712/KERN?style=flat-square&label=version&color=9BE34B"></a>
+  <a href="https://github.com/enoch3712/KERN/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/enoch3712/KERN/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/enoch3712/KERN/actions/workflows/pages.yml"><img alt="GitHub Pages" src="https://github.com/enoch3712/KERN/actions/workflows/pages.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/github/license/enoch3712/KERN?style=flat-square&color=42C9E8"></a>
   <a href="docs/install.md"><img alt="Claude Code, Codex, and Cursor" src="https://img.shields.io/badge/runtimes-Claude_Code_%7C_Codex_%7C_Cursor-7EDDB5?style=flat-square"></a>
@@ -134,7 +135,12 @@ KERN complements parsing, retrieval, tests, and version control. It does not rep
 
 ## Language and runtime coverage
 
-Python receives a deterministic AST-based baseline. JavaScript, TypeScript, Go, Rust, Java, Kotlin, Swift, C, C++, C#, and other recognized source formats receive a deterministic generic baseline before optional compiler-model enrichment. Unsupported text formats fall back to the generic representation and exact-source path.
+Python 3.10+ uses the standard-library deterministic frontend. The current optional
+JavaScript/TypeScript frontend covers `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, and
+`.tsx` when the mutually compatible dependencies pinned in
+[`requirements-compiler.txt`](requirements-compiler.txt) are installed. Other
+recognized source formats receive a deterministic generic baseline; KERN 0.2 does
+not claim structured tree-sitter frontends for them.
 
 | Environment | Distribution | Compiler selection |
 |---|---|---|
@@ -157,7 +163,9 @@ See [model routing](skills/kern/references/model-routing.md) for the host-specif
 ```bash
 npm ci
 npm run build
-python3 -m py_compile skills/kern/scripts/kern_cache.py skills/kern/scripts/render_ir.py
+python3 -m pip install --requirement requirements-compiler.txt
+python3 -m py_compile skills/kern/scripts/kern_cache.py skills/kern/scripts/render_ir.py skills/kern/scripts/kern_compile.py
+python3 -m unittest discover -s tests
 python3 skills/kern/scripts/kern_cache.py --repo . scan
 ```
 

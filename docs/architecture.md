@@ -10,11 +10,12 @@ KERN applies the compiler/virtual-memory pattern to coding-agent context.
 4. Only the semantic working set is enriched and loaded.
 5. Exact current source must be faulted before an edit.
 6. A source change invalidates its prior IL and rendered pages.
+7. Every IL symbol carries a contextual semantic handle backed by its exact slice and module dependencies; a passing verify or fresh fault is required before that symbol is edited.
 
 ## Lifecycle
 
 ```text
-scan → hash → invalidate → baseline → enrich → render → page in → exact fault → write → invalidate
+scan → hash → invalidate → compile(tiered) → render → page in → verify/fault → write → invalidate
 ```
 
 The repository-wide scan is cheap. Model work and image rendering are lazy. This is analogous to keeping a page table resident while paging detailed code representations into the active context only when a task touches them.
