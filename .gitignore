@@ -8,3 +8,5 @@ out/
 .wrangler/
 .DS_Store
 npm-debug.log*
+docs/superpowers/plans/
+.superpowers/
