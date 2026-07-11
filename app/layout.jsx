@@ -29,7 +29,7 @@ export const metadata = {
       url: "https://enoch3712.github.io/KERN/kern-og-v2.png",
       width: 1200,
       height: 630,
-      alt: "KERN — Compile large codebases for machine attention. Exact source before every write.",
+      alt: "KERN/IL — Less syntax. More software. For large codebases.",
     }],
   },
   twitter: {
