@@ -188,10 +188,12 @@ def parse_python(text: str) -> ModuleIR:
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             symbols.append(_function_symbol(node, node.name, text))
         elif isinstance(node, ast.ClassDef):
+            start = min([d.lineno for d in node.decorator_list] + [node.lineno])
             end = node.end_lineno or node.lineno
             symbols.append(Symbol(kind="class", name=node.name,
                                   bases=",".join(expr_text(b, 60) for b in node.bases),
-                                  span=(node.lineno, end), slice8=slice_sha8(text, node.lineno, end)))
+                                  span=(start, end), slice8=slice_sha8(text, start, end),
+                                  decorators=[expr_text(d, 60) for d in node.decorator_list]))
             for member in node.body:
                 if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     symbols.append(_function_symbol(member, f"{node.name}.{member.name}", text))

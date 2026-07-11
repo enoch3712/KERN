@@ -97,6 +97,13 @@ class TestPythonFrontend(unittest.TestCase):
         self.assertNotEqual(bad.parse_error, "")
         self.assertEqual(bad.symbols, [])
 
+    def test_decorated_class_span_includes_decorator(self):
+        src = "import functools\n\n@functools.total_ordering\nclass Ordered:\n    pass\n"
+        mod = kern_compile.parse_python(src)
+        c = next(s for s in mod.symbols if s.name == "Ordered")
+        self.assertEqual(c.span[0], 3)
+        self.assertEqual(c.decorators, ["functools.total_ordering"])
+
 
 if __name__ == "__main__":
     unittest.main()
