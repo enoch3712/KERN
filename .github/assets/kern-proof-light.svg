@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 310" role="img" aria-labelledby="title desc">
+  <title id="title">KERN pilot compression result</title>
+  <desc id="desc">Raw source at 36,674 estimated tokens becomes KERN IL at 5,795 and dense pages at 2,877, a 12.75 times smaller representation.</desc>
+  <rect x="1" y="1" width="958" height="308" rx="24" fill="#F7FAF8" stroke="#DCE6E0" stroke-width="2"/>
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <g transform="translate(36 42)">
+      <rect width="250" height="152" rx="16" fill="#FFFFFF" stroke="#D5DFD9"/>
+      <rect width="250" height="5" rx="2.5" fill="#A8B7AE"/>
+      <text x="22" y="43" fill="#65736B" font-size="14" font-weight="700" letter-spacing="2">RAW SOURCE</text>
+      <text x="22" y="94" fill="#0C1610" font-size="36" font-weight="800">36,674</text>
+      <text x="22" y="125" fill="#65736B" font-size="15">estimated text tokens</text>
+    </g>
+    <text x="306" y="128" fill="#718078" font-size="30" font-weight="600">→</text>
+    <g transform="translate(355 42)">
+      <rect width="250" height="152" rx="16" fill="#FFFFFF" stroke="#BBD9C7"/>
+      <rect width="250" height="5" rx="2.5" fill="#79E59A"/>
+      <text x="22" y="43" fill="#41895A" font-size="14" font-weight="700" letter-spacing="2">KERN IL</text>
+      <text x="22" y="94" fill="#0C1610" font-size="36" font-weight="800">5,795</text>
+      <text x="22" y="125" fill="#65736B" font-size="15">verified semantic text</text>
+    </g>
+    <text x="625" y="128" fill="#718078" font-size="30" font-weight="600">→</text>
+    <g transform="translate(674 42)">
+      <rect width="250" height="152" rx="16" fill="#FFFFFF" stroke="#B7DCE4"/>
+      <rect width="250" height="5" rx="2.5" fill="#43D7F5"/>
+      <text x="22" y="43" fill="#2B8192" font-size="14" font-weight="700" letter-spacing="2">DENSE PAGES</text>
+      <text x="22" y="94" fill="#0C1610" font-size="36" font-weight="800">2,877</text>
+      <text x="22" y="125" fill="#65736B" font-size="15">estimated image tokens</text>
+    </g>
+    <text x="480" y="241" fill="#0C1610" font-size="27" font-weight="800" text-anchor="middle">12.75× smaller representation</text>
+    <text x="480" y="274" fill="#65736B" font-size="16" text-anchor="middle">92.2% representation reduction · source-verified pilot</text>
+  </g>
+</svg>
