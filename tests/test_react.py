@@ -86,6 +86,22 @@ class TestComponentDetection(unittest.TestCase):
         self.assertEqual(s.kind, "component")
         self.assertEqual(s.react["wrapper"], "memo")
 
+    def test_memo_with_comparator_identifier_not_hijacked(self):
+        src = ("const Row = ({ id }) => <li>{id}</li>;\n"
+               "const MemoRow = memo(Row, (a, b) => a.id === b.id);\n")
+        mod = self.parse(src)
+        memo_syms = [s for s in mod.symbols if s.name == "MemoRow"]
+        self.assertEqual(len(memo_syms), 1)
+        self.assertEqual(memo_syms[0].kind, "const")   # falls to const fallback
+
+    def test_memo_inline_with_comparator_uses_first_arg(self):
+        src = "const Row = memo(({ id }) => <li>{id}</li>, (a, b) => a.id === b.id);\n"
+        mod = self.parse(src)
+        s = self.sym(mod, "Row")
+        self.assertEqual(s.kind, "component")
+        self.assertEqual(s.react["wrapper"], "memo")
+        self.assertEqual(s.react["props"], ["id"])
+
     def test_non_react_file_untouched(self):
         mod = self.parse("export function parse(raw) { return Number(raw); }\n",
                          dialect="js")

@@ -643,9 +643,10 @@ def parse_tsjs(text: str, dialect: str = "js") -> ModuleIR:
                             inner = None
                             if wrapper in ("memo", "forwardRef", "React.memo", "React.forwardRef"):
                                 args = field_node(value, "arguments")
-                                if args is not None:
-                                    inner = next((ch for ch in args.named_children
-                                                  if ch.type in ("arrow_function", "function_expression")), None)
+                                if args is not None and args.named_children:
+                                    first = args.named_children[0]
+                                    if first.type in ("arrow_function", "function_expression"):
+                                        inner = first
                             if inner is not None:
                                 sym = function_symbol(inner, ntext(name, 60))
                                 sym.decorators = [wrapper.split(".")[-1]]
