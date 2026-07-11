@@ -776,6 +776,34 @@ def fault_source(source: Path, relative: str, start: int | None, end: int | None
     )
 
 
+def verify_symbol(root: Path, paths: dict[str, Path], relative: str, source: Path,
+                  symbol: str, expected_hash: str, expected_span: str | None = None) -> dict[str, Any]:
+    import kern_compile
+    text = source.read_text(encoding="utf-8", errors="replace")
+    suffix = source.suffix.lower()
+    if suffix == ".py":
+        module = kern_compile.parse_python(text)
+    elif suffix in TSJS_SUFFIXES and kern_compile.tsjs_available():
+        module = kern_compile.parse_tsjs(text, typescript=suffix in {".ts", ".tsx"})
+    else:
+        raise ValueError(f"verify does not support {suffix or 'this file type'}; use fault with --expect-sha")
+    if module.parse_error:
+        raise RuntimeError(f"current source does not parse ({module.parse_error}); fault exact source")
+    base = {"ok": True, "operation": "verify", "source_rel": relative, "symbol": symbol,
+            "source_sha256": sha256_bytes(text.encode("utf-8", "surrogatepass"))}
+    matches = [s for s in module.symbols if s.kind in {"function", "class"} and s.name == symbol]
+    if not matches:
+        return {**base, "result": "stale", "reason": "symbol-not-found"}
+    found = matches[0]
+    current_span = f"L{found.span[0]}-{found.span[1]}"
+    if found.slice8 != expected_hash:
+        return {**base, "result": "stale", "reason": "symbol-bytes-changed",
+                "current_hash": found.slice8, "current_span": current_span}
+    if expected_span and expected_span != current_span:
+        return {**base, "result": "moved", "current_span": current_span}
+    return {**base, "result": "ok", "current_span": current_span}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".", help="Repository root (default: current directory)")
@@ -805,6 +833,11 @@ def parse_args() -> argparse.Namespace:
     fault.add_argument("--start", type=int)
     fault.add_argument("--end", type=int)
     fault.add_argument("--expect-sha")
+    verify = sub.add_parser("verify")
+    verify.add_argument("file")
+    verify.add_argument("--symbol", required=True)
+    verify.add_argument("--hash", required=True)
+    verify.add_argument("--span")
     return parser.parse_args()
 
 
@@ -836,6 +869,8 @@ def main() -> int:
             elif args.command == "fault":
                 sys.stdout.write(fault_source(source, relative, args.start, args.end, args.expect_sha))
                 return 0
+            elif args.command == "verify":
+                result = verify_symbol(root, paths, relative, source, args.symbol, args.hash, args.span)
             else:  # pragma: no cover
                 raise RuntimeError(f"Unknown command: {args.command}")
         json.dump(result, sys.stdout, indent=2, sort_keys=True)
