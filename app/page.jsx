@@ -184,7 +184,7 @@ export default function Home() {
         </div>
 
         <div className="install-terminal reveal visible" id="install">
-          <div className="terminal-head"><span>KERN / QUICK INSTALL</span><strong>v0.1</strong></div>
+          <div className="terminal-head"><span>KERN / QUICK INSTALL</span><strong>v0.1.1</strong></div>
           <div className="install-tabs" role="tablist" aria-label="Installation environment">
             {environments.map((environment) => (
               <button

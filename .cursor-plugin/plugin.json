@@ -1,7 +1,7 @@
 {
   "name": "kern",
   "description": "The context compiler for coding agents.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "KERN contributors"
   },

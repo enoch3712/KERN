@@ -2,6 +2,13 @@
 
 All notable changes to KERN are documented here.
 
+## 0.1.1 — 2026-07-11
+
+- Enforce codec-version invalidation and reject stale rendered pages.
+- Verify cached IR digests and exact compiler-worker headers before reuse or commit.
+- Remove private pilot artifacts and identifying benchmark metadata from the public history.
+- Add one-command Codex installation and portable compiler-agent overrides.
+
 ## 0.1.0 — 2026-07-11
 
 - Publish the portable KERN skill and deterministic cache runtime.
