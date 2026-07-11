@@ -1,0 +1,378 @@
+# Deterministic compiler walkthrough (KERN-IL/0.2 proposal)
+
+This document walks one real file through every stage of the proposed deterministic
+compiler, showing the artifact **before and after** each step. No model is involved
+at any stage: the same source bytes always produce the same IL bytes.
+
+Status: design proposal. The Python frontend upgrades the existing
+`python-ast-baseline` in `skills/kern/scripts/kern_cache.py`; other languages move
+from the regex line-filter fallback to tree-sitter.
+
+---
+
+## Step 0 — the input (authoritative source)
+
+`src/cache_loader.py`, 45 lines, ~343 tokens:
+
+```python
+"""Entry loader with hash verification for the KERN cache."""
+
+from __future__ import annotations
+
+import json
+import re
+from hashlib import sha256
+from pathlib import Path
+
+MANIFEST_NAME = "manifest.json"
+ENTRY_PATTERN = re.compile(r"^[a-z0-9_/]+\.kern-il\.txt$")
+
+
+class StaleSource(Exception):
+    """Raised when the on-disk source no longer matches the expected hash."""
+
+
+def load_entry(path: Path, expected_sha: str) -> dict:
+    """Read a cache entry, verify its hash, and parse it as JSON."""
+    data = path.read_bytes()
+    current_sha = sha256(data).hexdigest()
+    if current_sha != expected_sha:
+        raise StaleSource(path)
+    return json.loads(data)
+
+
+def find_entries(root: Path) -> list[Path]:
+    """Return every manifest-listed entry under the cache root."""
+    manifest = load_entry(root / MANIFEST_NAME, read_expected(root))
+    entries = []
+    for name, record in manifest["files"].items():
+        if not ENTRY_PATTERN.match(name):
+            continue
+        candidate = root / "ir" / name
+        if candidate.is_file():
+            entries.append(candidate)
+    return entries
+
+
+def read_expected(root: Path) -> str:
+    """Read the pinned manifest hash written by the last scan."""
+    pin = (root / ".pin").read_text(encoding="utf-8").strip()
+    if len(pin) != 64:
+        raise ValueError(f"corrupt pin file in {root}")
+    return pin
+```
+
+---
+
+## Step 1 — parse: source → syntax tree
+
+The file goes through a real parser, never a regex.
+
+| Language | Parser | Dependency |
+|---|---|---|
+| Python | `ast` (standard library) | none — already used today |
+| TypeScript, JavaScript, Go, Rust, Java, … | tree-sitter grammar | `pip install tree-sitter tree-sitter-<lang>` |
+| Parser unavailable or syntax error | current generic line baseline | none (fallback, clearly labeled) |
+
+**Before:** raw text.
+**After:** a typed tree. For `load_entry` the parser produces (abridged):
+
+```text
+FunctionDef  name=load_entry  lineno=18  end_lineno=24
+├── args:      [path: Path, expected_sha: str]     returns: dict
+├── Assign     data = Call(path.read_bytes)
+├── Assign     current_sha = Call(sha256(data).hexdigest)
+├── If         Compare(current_sha != expected_sha)
+│   └── Raise  Call(StaleSource, [path])
+└── Return     Call(json.loads, [data])
+```
+
+Every node carries exact line/column positions. This is where determinism comes
+from: the tree is a fact about the bytes, not an interpretation of them.
+
+---
+
+## Step 2 — extract: tree → symbol model
+
+A mechanical walk collects, per symbol: qualified name, signature, span, calls,
+control-flow operations, raise sites, and a hash of the symbol's exact source slice.
+
+**Before:** syntax tree.
+**After:** one record per symbol (internal form, never stored):
+
+```json
+{
+  "symbol": "load_entry",
+  "kind": "function",
+  "signature": "(path: Path, expected_sha: str) -> dict",
+  "span": [18, 24],
+  "slice_sha256": "a4f1c2e9…",
+  "calls": ["path.read_bytes", "sha256().hexdigest", "json.loads"],
+  "flow": [
+    {"op": "CALL", "expr": "path.read_bytes()", "binds": "data"},
+    {"op": "CALL", "expr": "sha256(data).hexdigest()", "binds": "current_sha"},
+    {"op": "IF",   "test": "current_sha != expected_sha",
+                   "then": [{"op": "RAISE", "expr": "StaleSource(path)"}]},
+    {"op": "RET",  "expr": "json.loads(data)"}
+  ],
+  "raises": ["StaleSource"]
+}
+```
+
+`slice_sha256` is the sha256 of source lines 18–24 exactly as they appear on disk.
+It becomes the symbol's source-map handle (step 5).
+
+---
+
+## Step 3 — effects and exception propagation
+
+Still no model. Two mechanical passes over the symbol models:
+
+**Effect table.** Known callees map to effect classes:
+
+| Callee pattern | Effect |
+|---|---|
+| `*.read_bytes`, `*.read_text`, `open(..., "r")`, `*.is_file` | `fs:read` |
+| `*.write_bytes`, `*.write_text`, `os.replace` | `fs:write` |
+| `requests.*`, `urllib.*`, `fetch` | `net` |
+| `subprocess.*`, `os.system` | `proc` |
+| `time.*`, `datetime.now` | `time` |
+| `random.*`, `uuid.*` | `random` |
+
+**Propagation (intra-file fixpoint).** If `find_entries` calls `load_entry` and
+`load_entry` has `fs:read`, then `find_entries` inherits `fs:read` — with the path
+recorded. Same for raises. Calls to symbols outside the file that match no table
+entry are listed explicitly as unknown, never silently dropped.
+
+**Before:** `find_entries` record has `calls` but no semantics.
+**After:**
+
+```json
+{
+  "symbol": "find_entries",
+  "effects": ["fs:read (via load_entry, read_expected, is_file)"],
+  "raises":  ["StaleSource (via load_entry)", "ValueError (via read_expected)"],
+  "unknown_calls": []
+}
+```
+
+Note: `find_entries` raising `ValueError` is a fact that appears **nowhere on any
+single line of the source** — it emerges from propagation. The deterministic IL can
+state things the raw text never states in one place.
+
+---
+
+## Step 4 — emit: symbol models → KERN-IL page
+
+One shared emitter renders all languages. Two comparisons follow.
+
+### Today's output (`kern-il/0.1`, python-ast-baseline) — real output, ~531 tokens
+
+```text
+KERN-IL/0.1
+source_rel=src/cache_loader.py
+source_sha256=412e2610…
+generator=deterministic-baseline/0.1
+mode=python-ast-baseline
+
+MODULE @L1-45
+IMPORT @L3 from __future__ import annotations
+IMPORT @L5 import json
+IMPORT @L6 import re
+IMPORT @L7 from hashlib import sha256
+IMPORT @L8 from pathlib import Path
+C @L10 MANIFEST_NAME='manifest.json'
+C @L11 ENTRY_PATTERN=re.compile('^[a-z0-9_/]+\\.kern-il\\.txt$')
+
+CLASS StaleSource(Exception) @L14-15
+
+F load_entry(path: Path, expected_sha: str)->dict @L18-24
+  DOC Read a cache entry, verify its hash, and parse it as JSON.
+  CALLS path.read_bytes, sha256(data).hexdigest, json.loads, StaleSource, sha256
+  20|SET data=path.read_bytes()
+  21|SET current_sha=sha256(data).hexdigest()
+  22|IF current_sha != expected_sha
+    23|ERR StaleSource(path)
+  24|RET json.loads(data)
+  …
+```
+
+Problems: the `CALLS` line duplicates the flow lines below it; every statement
+carries its own line number; no effects; no exception propagation; no per-symbol
+hash; the omissions block is fixed boilerplate.
+
+### Proposed output (`kern-il/0.2`) — ~341 tokens
+
+```text
+KERN-IL/0.2
+source_rel=src/cache_loader.py
+source_sha256=412e261066069477
+repo_revision=d7e8242
+generator=kern-det/0.2 lang=python frontend=pyast
+
+IMPORTS json, re, hashlib.sha256, pathlib.Path @L3-8
+C MANIFEST_NAME='manifest.json' @L10
+C ENTRY_PATTERN=re.compile(r'^[a-z0-9_/]+\.kern-il\.txt$') @L11 !FAULT(regex)
+
+CLASS StaleSource(Exception) @L14-15 ^b8e2d1a4
+
+F load_entry(path: Path, expected_sha: str) -> dict @L18-24 ^a4f1c2e9
+  CALL path.read_bytes() -> data
+  CALL sha256(data).hexdigest() -> current_sha
+  IF current_sha != expected_sha: RAISE StaleSource(path)
+  RET json.loads(data)
+  EFFECTS fs:read
+  RAISES StaleSource
+
+F find_entries(root: Path) -> list[Path] @L27-37 ^c91d33f2
+  CALL load_entry(root/MANIFEST_NAME, read_expected(root)) -> manifest
+  LOOP (name, record) in manifest['files'].items()
+    IF not ENTRY_PATTERN.match(name): CONTINUE
+    IF (root/'ir'/name).is_file(): CALL entries.append(...)
+  RET entries
+  EFFECTS fs:read (via load_entry, read_expected, is_file)
+  RAISES StaleSource, ValueError (via load_entry, read_expected)
+
+F read_expected(root: Path) -> str @L40-45 ^7d02ee18
+  CALL (root/'.pin').read_text().strip() -> pin
+  IF len(pin) != 64: RAISE ValueError
+  RET pin
+  EFFECTS fs:read
+  RAISES ValueError
+
+OMIT docstrings=4 comments=0 blank=9; bodies verbatim-compressed
+FAULT-BEFORE edit(any), regex(L11), exact-literals
+```
+
+What changed and why:
+
+- **`-> var` dataflow form.** `CALL path.read_bytes() -> data` replaces
+  `SET data=path.read_bytes()` plus the redundant `CALLS` list.
+- **Per-symbol `^hash`.** sha256 prefix of the symbol's exact source slice — the
+  source-map handle.
+- **`EFFECTS` / `RAISES`.** Computed in step 3, including propagated facts.
+- **`!FAULT(reason)` risk tags.** The compiler stamps lines whose IL rendering is
+  known-lossy or high-stakes: regex literals, float/bit math, concurrency
+  primitives, truncated strings. Contract: a tagged line may not support a claim
+  or an edit without an exact-source fault first.
+- **`OMIT` with real counts.** Mechanical per-file numbers instead of boilerplate.
+- **One line-span per symbol** instead of per statement.
+
+---
+
+## Step 5 — the source-map handle and the latent-fault trap
+
+Every symbol line is addressable as:
+
+```text
+repo_revision : source_sha256 : symbol_path : span
+d7e8242       : 412e2610…     : load_entry  : L18-24   (slice ^a4f1c2e9)
+```
+
+The failure this closes: an agent read the IL (or its image render) earlier, the
+source has since changed — or the image was misread — and the agent edits from
+stale context. Nothing traps, because unlike a CPU page fault, a *latent* fault
+raises no signal. The defense is a program, not agent discipline:
+
+```bash
+python3 kern_cache.py --repo . verify src/cache_loader.py \
+  --symbol load_entry --hash a4f1c2e9
+```
+
+| Result | Meaning | Required action |
+|---|---|---|
+| `ok` | Symbol bytes unchanged, same span | proceed |
+| `moved` | Same bytes, new span (file shifted) | use returned span |
+| `stale` | Symbol bytes changed | fault exact source; IL page invalid |
+
+The skill contract makes `verify` mandatory on the edit path: no write to a symbol
+that was read from IL or an image without a passing `verify` (or a fresh `fault`)
+for that symbol's handle.
+
+---
+
+## Step 6 — cache, render, done
+
+Unchanged from today: the IL page is written to `.kern/ir/…`, the manifest records
+`source_sha256` and `ir_sha256`, and the renderer may pack cold pages into lossless
+WebP. The codec version bump (`kern-il/0.2`) automatically invalidates every 0.1
+page on first contact, exactly as the existing codec-invalidation path already does.
+
+---
+
+## Measured token counts
+
+### Small file (this walkthrough's 45-line example)
+
+Approximate tokens (chars/4), measured on the artifacts above:
+
+| Artifact | Tokens | vs. source |
+|---|---:|---:|
+| Source (45 lines, dense, few comments) | ~343 | 1.00× |
+| Current 0.1 baseline | ~531 | **1.55× larger** |
+| Proposed 0.2 | ~341 | 1.00× — break-even |
+
+On a **small, dense** file the current baseline *expands* the source, and 0.2 only
+breaks even — while adding effects, propagated exceptions, and per-symbol hashes.
+The skill should skip IL for files below a size floor where source is already the
+cheaper representation.
+
+### Large file (3,704-line production Python file, ~47,000 tokens)
+
+Run against a real 3,704-line document-processing module — the same size class as
+the pilot file. Deterministic AST extraction was emitted at four detail tiers:
+
+| Tier | Contents per function | Tokens | Compression |
+|---|---|---:|---:|
+| L0 | Signatures, classes, constants, imports only | 1,891 | **24.9×** |
+| L1 | L0 + deduplicated calls + raises | 4,567 | **10.3×** |
+| L2 | L1 + control-flow skeleton (IF/LOOP/TRY/RET, no expressions) | 7,273 | **6.5×** |
+| L3 | L2 + full expressions on every flow line | 10,095 | **4.7×** |
+| — | Current 0.1 baseline (statement dump) on same file | 28,673 | 1.6× |
+
+Two conclusions:
+
+1. **Deterministic extraction reaches pilot-grade compression.** L2 (6.5×) matches
+   the model-enriched pilot result (6.33×) with zero model tokens and full
+   determinism. The current 0.1 baseline's weakness is not the AST approach — it
+   is the verbose per-statement dump (`CALLS` duplication, `SET` lines carrying
+   whole expressions, per-statement line numbers).
+2. **Detail must be tiered per symbol.** The gap between L1 (10.3×) and L3 (4.7×)
+   is the cost of statement bodies. The 0.2 emitter should map tiers onto KERN's
+   existing temperature model: cold symbols get L1, warm symbols get L2/L3, hot
+   symbols get exact source. A tier marker on each function line
+   (e.g. `F name(...) ... ~L1`) declares what was omitted and makes a deeper
+   fault explicit and cheap.
+
+Redaction verified on the same run: a hardcoded `s2_…` API key present in the
+source appears nowhere in the IL (6 `<REDACTED …>` markers emitted).
+
+### On micro-compressing keywords
+
+Replacing IL keywords with shorter codes (`CALLS` → `K`, `EFFECTS` → `E`) is
+mostly a false economy and is out of scope for 0.2:
+
+- Modern BPE tokenizers already encode common short words as 1–2 tokens; a
+  single-letter opcode saves at most ~1 token per line — bounded by roughly 10%
+  of an L2 page, before subtracting the legend that must ship with every page.
+- Identifiers, which dominate IL tokens, can never be mapped: the agent must
+  grep, quote, and edit them verbatim.
+- A per-page dictionary is a new latent-fault source — a misremembered mapping is
+  exactly the "confidently wrong" failure this design exists to prevent.
+
+Tiering is the honest lever: L3→L2 alone saves 28% with no decode risk.
+
+---
+
+## Verification plan
+
+1. **Determinism:** compile every corpus file twice; outputs must be byte-identical.
+2. **Golden files:** fixture source → expected IL, per language, in CI.
+3. **Fact fidelity:** for each corpus file, extract signatures, raise sites, and
+   call names independently from the AST and assert the IL contains each one —
+   machine-checked, replacing the pilot's manual five-fact retrieval check.
+4. **Token benchmarks:** count source vs. IL tokens (Anthropic count-tokens API
+   when available, offline estimator otherwise) across a corpus bucketed by file
+   size; publish per-language results under `benchmarks/results/`.
+5. **Fallback:** corpus runs with tree-sitter absent and with syntax-broken files
+   must degrade to the labeled generic baseline, never crash.
