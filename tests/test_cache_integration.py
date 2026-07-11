@@ -12,6 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "kern" / "scripts"))
 import kern_cache  # noqa: E402
 import kern_compile  # noqa: E402
+import kern_react  # noqa: E402
 
 BIG_PY = '"""Doc."""\n\nimport json\n\n' + "\n\n".join(
     f'def fn_{i}(path, n):\n'
@@ -180,6 +181,58 @@ class TestCacheIntegration(unittest.TestCase):
             first_fingerprint,
             manifest["files"]["mod.js"]["ir_compiler_fingerprint"],
         )
+
+    def test_react_adapter_content_change_invalidates_tsjs_cache(self):
+        if not kern_compile.tsjs_available(tsx=True):
+            self.skipTest("tsx grammar not installed")
+        self.config["min_ir_tokens"] = 1
+        source = "export const Card = ({ title }) => <article>{title}</article>;\n"
+        (self.root / "card.tsx").write_text(source)
+        adapter = self.root / "kern_react.py"
+        adapter.write_text("# adapter revision one\n")
+
+        with mock.patch.object(kern_react, "__file__", str(adapter)):
+            first = self.ensure("card.tsx")
+            manifest = json.loads(self.paths["manifest"].read_text())
+            first_fingerprint = manifest["files"]["card.tsx"]["ir_compiler_fingerprint"]
+            self.assertFalse(first["cache_hit"])
+            self.assertEqual(first["mode"], "structured:tree-sitter+react")
+            self.assertTrue(self.ensure("card.tsx")["cache_hit"])
+
+            adapter.write_text("# adapter revision two\n")
+            changed = self.ensure("card.tsx")
+            manifest = json.loads(self.paths["manifest"].read_text())
+
+        self.assertFalse(changed["cache_hit"])
+        self.assertNotEqual(
+            first_fingerprint,
+            manifest["files"]["card.tsx"]["ir_compiler_fingerprint"],
+        )
+
+    def test_react_adapter_fingerprint_tolerates_missing_and_unavailable_file(self):
+        source = self.root / "card.tsx"
+        source.write_text("export const Card = () => <article />;\n")
+        adapter = self.root / "missing-kern-react.py"
+
+        with mock.patch.object(kern_react, "__file__", str(adapter)):
+            missing = kern_cache.compiler_fingerprint(
+                source, self.config, "L2", "structured:tree-sitter+react"
+            )
+
+            adapter.write_text("# unreadable adapter\n")
+            original_sha256_file = kern_cache.sha256_file
+
+            def reject_adapter(path):
+                if Path(path) == adapter:
+                    raise PermissionError("adapter source is unreadable")
+                return original_sha256_file(path)
+
+            with mock.patch.object(kern_cache, "sha256_file", side_effect=reject_adapter):
+                unavailable = kern_cache.compiler_fingerprint(
+                    source, self.config, "L2", "structured:tree-sitter+react"
+                )
+
+        self.assertNotEqual(missing, unavailable)
 
     def test_pre_fingerprint_manifest_is_proactively_invalidated(self):
         self.ensure("big.py")

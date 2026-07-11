@@ -78,14 +78,14 @@ Rules:
 - **PROPS** — first parameter. Destructured pattern lists names with defaults (`onClose?=noop` when a default exists; `?` when the TS type marks it optional and that is syntactically visible). Non-destructured param renders as its name (`props`).
 - **STATE** — `const [x, setX] = useState(init)` → `STATE x=init`; setter name recorded internally for EVENT lowering. `useReducer` renders the pair and arguments.
 - **CTX / REF / HOOK** — `useContext`, `useRef`, and custom `use[A-Z]\w*` calls respectively. Custom hooks are opaque: call text only, no cross-file resolution.
-- **EFFECT** — `useEffect` / `useLayoutEffect`. Dependency array rendered verbatim (`deps=[user.id]`, `deps=[]`); a missing array renders `deps=EVERY-RENDER`. Effect body: L2 shows the head only; L3 summarizes via existing `flow()`.
+- **EFFECT** — `useEffect` / `useLayoutEffect`. Dependency array rendered verbatim (`deps=[user.id]`, `deps=[]`); a missing array renders `deps=EVERY-RENDER`. Effect body: L2 shows the head plus any risk-bearing ops required by the fault contract; L3 summarizes via existing `flow()`.
 - **EVENT** — JSX attribute matching `on[A-Z]\w+={expr}`. If the handler body is a single known-setter call, lower to `set <state>=<arg>`; otherwise render the callee name or `flow()`-style summary at L3.
 - **RENDER** — JSX tree, indentation = nesting:
   - `{cond && <X/>}` → `IF cond > X`; ternary → `IF cond > X ELSE > Y`
   - `.map(` callback returning JSX → `FOR param in receiver > X`
   - Host elements (lowercase) are structure; text/expression children render as `{expr}` capped by existing `ntext` (secret redaction inherited)
   - Capitalized JSX names are component dependencies; names that match imports cross-link naturally through the existing import lines
-- Non-hook, non-render statements in the component body flow through the existing L3 flow-op rendering unchanged.
+- Non-hook, non-render statements in the component body flow through the existing L3 flow-op rendering unchanged; L2 retains only risk-bearing ops.
 - All line math is `\n`-only, matching the repo rule (never `str.splitlines()`).
 
 ## Tier mapping
@@ -93,7 +93,7 @@ Rules:
 | Tier | Component detail |
 | --- | --- |
 | L1 | `COMPONENT name (props) span #hash` — one line, like current FN heads |
-| L2 | + STATE/CTX/REF/HOOK/EFFECT/EVENT heads; RENDER collapsed to components-only tree (host elements and attributes dropped; IF/FOR structure kept) |
+| L2 | + STATE/CTX/REF/HOOK/EFFECT/EVENT heads and risk-bearing body ops; RENDER collapsed to components-only tree (host elements and attributes dropped; IF/FOR structure kept) |
 | L3 | Full render tree with attributes, effect bodies and handler bodies via `flow()` |
 
 ## Faulting
@@ -107,6 +107,7 @@ Ambiguity never disappears silently. Reuses the existing `!FAULT(...)` inline ch
 | Spread props as the sole prop source (`{...rest}`) | rendered `...rest` + `!FAULT(spread-props)` |
 | Render prop / children-as-function | `!FAULT(render-prop)`, body summarized as flow |
 | Hook call inside conditional | `!FAULT(conditional-hook)` |
+| Multiple or nested JSX return paths collapsed to one render root | `!FAULT(render-control-flow)` |
 | Render tree exceeding op budget | explicit `…+N` + `!FAULT(render-truncated)` |
 
 Frontend IR remains a reasoning representation, not the write authority: edits still require faulting exact current source and verifying the slice hash, per the existing contract.

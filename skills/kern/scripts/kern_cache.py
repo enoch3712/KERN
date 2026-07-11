@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import os
@@ -546,6 +547,31 @@ def _distribution_version(name: str) -> str:
         return "unknown"
 
 
+def _module_source_fingerprint(module_name: str, fallback: Path | None = None) -> str:
+    """Return a module source digest, or a deterministic availability marker.
+
+    Optional compiler adapters are still fingerprint inputs when they cannot be
+    imported: if their source is present, hash the source directly; otherwise
+    record a stable marker instead of making cache validation fail.
+    """
+    path = fallback
+    try:
+        module = importlib.import_module(module_name)
+        module_file = getattr(module, "__file__", None)
+        if module_file:
+            path = Path(module_file)
+    except Exception:
+        pass
+    if path is None:
+        return "unavailable"
+    try:
+        return sha256_file(path)
+    except FileNotFoundError:
+        return "missing"
+    except (OSError, ValueError):
+        return "unavailable"
+
+
 def compiler_fingerprint(
     source: Path,
     config: dict[str, Any],
@@ -562,6 +588,10 @@ def compiler_fingerprint(
         "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
     }
     if suffix in TSJS_SUFFIXES:
+        try:
+            react_fallback = compiler_path.with_name("kern_react.py")
+        except ValueError:
+            react_fallback = None
         capabilities.update(
             {
                 "tree-sitter": _distribution_version("tree-sitter"),
@@ -573,6 +603,9 @@ def compiler_fingerprint(
             capabilities["tsjs"] = kern_compile.tsjs_capability_fingerprint()
         except Exception:
             capabilities["tsjs"] = "unavailable"
+        capabilities["kern-react-sha256"] = _module_source_fingerprint(
+            "kern_react", react_fallback
+        )
     payload = {
         "codec": CODEC_VERSION,
         "generator": BASELINE_GENERATOR,

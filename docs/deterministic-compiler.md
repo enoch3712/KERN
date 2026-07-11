@@ -447,7 +447,8 @@ Rules:
   resolution.
 - **EFFECT** — `useEffect` / `useLayoutEffect`. Dependency array rendered
   verbatim (`deps=[user.id]`, `deps=[]`); a missing array renders
-  `deps=EVERY-RENDER`. Effect body: L2 shows the head only; L3 summarizes via
+  `deps=EVERY-RENDER`. Effect body: L2 normally shows the head only but retains
+  risk-bearing operations required by the fault contract; L3 summarizes via
   existing `flow()`.
 - **EVENT** — JSX attribute matching `on[A-Z]\w+={expr}`. If the handler body is
   a single known-setter call, lower to `set <state>=<arg>`; otherwise render the
@@ -463,7 +464,8 @@ Rules:
   existing L3 flow-op rendering unchanged (hook calls are skipped there —
   they already surface as STATE/CTX/REF/HOOK/EFFECT heads). Components also
   emit the same `EFFECTS` provenance line as plain functions (effect classes
-  plus `unknown-calls=N`) at L2 and L3.
+  plus `unknown-calls=N`) at L2 and L3. L2 retains only risk-bearing body ops
+  so their inline markers and `FAULT-BEFORE` entries cannot disappear.
 - All line math is `\n`-only, matching the repo rule (never `str.splitlines()`).
 
 ### Tier mapping
@@ -471,12 +473,12 @@ Rules:
 | Tier | Component detail |
 | --- | --- |
 | L1 | `COMPONENT name (props) span #hash` — one line, like current FN heads |
-| L2 | + STATE/CTX/REF/HOOK/EFFECT/EVENT heads and the `EFFECTS` provenance line; RENDER collapsed to components-only tree (host elements and attributes dropped; IF/FOR structure kept) |
+| L2 | + STATE/CTX/REF/HOOK/EFFECT/EVENT heads, risk-bearing body ops, and the `EFFECTS` provenance line; RENDER collapsed to components-only tree (host elements and attributes dropped; IF/FOR structure kept) |
 | L3 | Full render tree with attributes, effect bodies, handler bodies, and non-hook body statements via `flow()` |
 
 ### Faulting
 
-Ambiguity never disappears silently. Six markers reuse the existing
+Ambiguity never disappears silently. Seven markers reuse the existing
 `!FAULT(...)` inline channel and FAULTS footer:
 
 | Construct | Marker |
@@ -486,6 +488,7 @@ Ambiguity never disappears silently. Six markers reuse the existing
 | Spread props as the sole prop source (`{...rest}`) | rendered `...rest` + `!FAULT(spread-props)` |
 | Render prop / children-as-function | `!FAULT(render-prop)`, body summarized as flow |
 | Hook call inside conditional | `!FAULT(conditional-hook)` |
+| Multiple or nested JSX return paths collapsed to one render root | `!FAULT(render-control-flow)` |
 | Render tree exceeding op budget | explicit `…+N` + `!FAULT(render-truncated)` |
 
 Frontend IR remains a reasoning representation, not the write authority: edits
