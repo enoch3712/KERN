@@ -105,5 +105,75 @@ class TestPythonFrontend(unittest.TestCase):
         self.assertEqual(c.decorators, ["functools.total_ordering"])
 
 
+FLOW_SAMPLE = '''
+import re
+import threading
+
+PATTERN = re.compile(r"^x+$")
+
+
+def process(path, items):
+    data = path.read_bytes()
+    total = 0
+    for item in items:
+        if item.bad:
+            raise ValueError(item)
+        total += 1
+    try:
+        result = transform(data)
+    except KeyError as exc:
+        log(exc)
+    finally:
+        cleanup()
+    with threading.Lock():
+        shared.append(total)
+    return result
+
+
+def transform(data):
+    return re.sub(r"a+", "b", data.decode())
+'''
+
+
+class TestFlowOps(unittest.TestCase):
+    def setUp(self):
+        self.mod = kern_compile.parse_python(FLOW_SAMPLE)
+        self.proc = next(s for s in self.mod.symbols if s.name == "process")
+
+    def ops(self):
+        return [(o.op, o.depth) for o in self.proc.flow]
+
+    def test_call_with_binds(self):
+        first = self.proc.flow[0]
+        self.assertEqual(first.op, "CALL")
+        self.assertEqual(first.binds, "data")
+        self.assertIn("path.read_bytes", first.detail)
+        self.assertGreater(first.line, 0)
+
+    def test_plain_assignment_not_emitted(self):
+        details = " ".join(o.detail for o in self.proc.flow)
+        self.assertNotIn("total = 0", details)
+
+    def test_structure(self):
+        ops = self.ops()
+        self.assertIn(("LOOP", 0), ops)
+        self.assertIn(("IF", 1), ops)
+        self.assertIn(("RAISE", 2), ops)
+        self.assertIn(("TRY", 0), ops)
+        self.assertIn(("CATCH", 0), ops)
+        self.assertIn(("FINALLY", 0), ops)
+        self.assertIn(("WITH", 0), ops)
+        self.assertIn(("RET", 0), ops)
+
+    def test_regex_risk_tagged(self):
+        trans = next(s for s in self.mod.symbols if s.name == "transform")
+        ret = next(o for o in trans.flow if o.op == "RET")
+        self.assertEqual(ret.risk, "regex")
+
+    def test_concurrency_risk_tagged(self):
+        withs = [o for o in self.proc.flow if o.op == "WITH"]
+        self.assertEqual(withs[0].risk, "concurrency")
+
+
 if __name__ == "__main__":
     unittest.main()

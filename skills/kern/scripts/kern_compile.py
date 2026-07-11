@@ -136,6 +136,116 @@ def _omit_counts(text: str, tree: ast.Module) -> dict:
     return {"docstrings": docstrings, "comments": comments, "blank": blank, "assignments": assigns}
 
 
+_RISK_CALL = [
+    ("regex", re.compile(r"^re\.(compile|match|search|sub|split|fullmatch|findall|finditer)$")),
+    ("crypto", re.compile(r"^(hashlib|hmac|secrets)\.")),
+    ("concurrency", re.compile(r"^(threading|asyncio|multiprocessing|concurrent)\.")),
+]
+_RISK_MATH = re.compile(r"(\*\*|<<|>>)")
+_TRY_TYPES = (ast.Try, getattr(ast, "TryStar", ast.Try))
+
+
+def expr_risk(node: ast.AST | None) -> str:
+    if node is None:
+        return ""
+    for ch in ast.walk(node):
+        if isinstance(ch, ast.Call):
+            try:
+                fn = ast.unparse(ch.func)
+            except Exception:
+                continue
+            for name, rx in _RISK_CALL:
+                if rx.search(fn):
+                    return name
+        elif isinstance(ch, ast.withitem):
+            try:
+                fn = ast.unparse(ch.context_expr)
+            except Exception:
+                continue
+            if fn.startswith(("threading.", "asyncio.", "multiprocessing.")):
+                return "concurrency"
+    try:
+        if _RISK_MATH.search(ast.unparse(node)):
+            return "math"
+    except Exception:
+        pass
+    return ""
+
+
+def flow_ops(statements: list, depth: int = 0, budget: int = 200) -> list:
+    ops: list[FlowOp] = []
+
+    def add(node, op, detail="", binds="", risk=""):
+        if len(ops) < budget:
+            ops.append(FlowOp(op=op, detail=detail, binds=binds, depth=depth,
+                              line=getattr(node, "lineno", 0), risk=risk))
+
+    def sub(body):
+        return flow_ops(body, depth + 1, budget - len(ops))
+
+    for s in statements:
+        if len(ops) >= budget:
+            break
+        if isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and isinstance(s.value.value, str):
+            continue  # docstring
+        if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            add(s, "NESTED", s.name)
+        elif isinstance(s, (ast.Assign, ast.AnnAssign)) and isinstance(getattr(s, "value", None), (ast.Call, ast.Await)):
+            targets = s.targets if isinstance(s, ast.Assign) else [s.target]
+            names = ",".join(_target(t) for t in targets)
+            call = s.value.value if isinstance(s.value, ast.Await) else s.value
+            hint = bool(SECRET_NAME.search(names))
+            add(s, "CALL", expr_text(call, 120, hint), binds=names, risk=expr_risk(call))
+        elif isinstance(s, ast.If):
+            add(s, "IF", expr_text(s.test, 100), risk=expr_risk(s.test))
+            ops.extend(sub(s.body))
+            if s.orelse:
+                add(s, "ELSE")
+                ops.extend(sub(s.orelse))
+        elif isinstance(s, (ast.For, ast.AsyncFor)):
+            add(s, "LOOP", f"{_target(s.target)} in {expr_text(s.iter, 100)}")
+            ops.extend(sub(s.body))
+        elif isinstance(s, ast.While):
+            add(s, "WHILE", expr_text(s.test, 100), risk=expr_risk(s.test))
+            ops.extend(sub(s.body))
+        elif isinstance(s, (ast.With, ast.AsyncWith)):
+            detail = ", ".join(expr_text(i.context_expr, 80) for i in s.items)
+            risk = ""
+            for i in s.items:
+                risk = risk or expr_risk(i.context_expr)
+            add(s, "WITH", detail, risk=risk)
+            ops.extend(sub(s.body))
+        elif isinstance(s, _TRY_TYPES):
+            add(s, "TRY")
+            ops.extend(sub(s.body))
+            for h in s.handlers:
+                add(h, "CATCH", expr_text(h.type, 60))
+                ops.extend(sub(h.body))
+            if s.finalbody:
+                add(s, "FINALLY")
+                ops.extend(sub(s.finalbody))
+        elif isinstance(s, ast.Return):
+            add(s, "RET", expr_text(s.value, 100), risk=expr_risk(s.value))
+        elif isinstance(s, ast.Raise):
+            add(s, "RAISE", expr_text(s.exc, 80))
+        elif isinstance(s, ast.Match):
+            add(s, "MATCH", expr_text(s.subject, 80))
+            for case in s.cases:
+                add(case, "CASE", expr_text(case.pattern, 60))
+                ops.extend(sub(case.body))
+        elif isinstance(s, ast.Expr):
+            v = s.value
+            if isinstance(v, ast.Await):
+                add(s, "AWAIT", expr_text(v.value, 120))
+            elif isinstance(v, ast.Call):
+                add(s, "CALL", expr_text(v, 120), risk=expr_risk(v))
+            elif isinstance(v, (ast.Yield, ast.YieldFrom)):
+                add(s, "YIELD", expr_text(getattr(v, "value", None), 80))
+        elif isinstance(s, (ast.Break, ast.Continue)):
+            add(s, s.__class__.__name__.upper())
+    return ops[:budget]
+
+
 def _function_symbol(node, qualified: str, text: str) -> Symbol:
     calls: list[str] = []
     raises: list[str] = []
@@ -163,7 +273,7 @@ def _function_symbol(node, qualified: str, text: str) -> Symbol:
         slice8=slice_sha8(text, start, end),
         calls=calls,
         raises=raises,
-        flow=[],  # filled by flow_ops in Task 2
+        flow=flow_ops(node.body),
         is_async=isinstance(node, ast.AsyncFunctionDef),
     )
 
