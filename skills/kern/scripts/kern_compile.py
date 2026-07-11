@@ -440,9 +440,24 @@ def emit_il(module: ModuleIR, source_rel: str, source_sha256: str,
     faults: list[str] = []
     imports = [s for s in module.symbols if s.kind == "import"]
     if imports:
-        lo = min(s.span[0] for s in imports)
-        hi = max(s.span[1] for s in imports)
-        out.append(f"IMPORTS {'; '.join(s.detail for s in imports)} @L{lo}-{hi}")
+        # Group imports into contiguous runs
+        sorted_imports = sorted(imports, key=lambda s: s.span[0])
+        runs = []
+        current_run = [sorted_imports[0]]
+        for imp in sorted_imports[1:]:
+            # Start new run if gap > 1 line after previous import's end
+            if imp.span[0] - current_run[-1].span[1] > 1:
+                runs.append(current_run)
+                current_run = [imp]
+            else:
+                current_run.append(imp)
+        runs.append(current_run)
+
+        # Emit one IMPORTS line per run
+        for run in runs:
+            lo = min(s.span[0] for s in run)
+            hi = max(s.span[1] for s in run)
+            out.append(f"IMPORTS {'; '.join(s.detail for s in run)} @L{lo}-{hi}")
     for s in module.symbols:
         if s.kind == "const":
             tag = ""

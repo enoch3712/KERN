@@ -87,6 +87,20 @@ class TestEmitter(unittest.TestCase):
     def test_deterministic(self):
         self.assertEqual(emit("L2"), emit("L2"))
 
+    def test_scattered_imports_do_not_balloon_span(self):
+        src = (
+            "import os\n\n\n"
+            "def a():\n    return 1\n\n\n"
+            "import sys\n\n\n"
+            "def b():\n    return 2\n"
+        )
+        mod = kern_compile.parse_python(src)
+        il = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L2")
+        import_lines = [l for l in il.splitlines() if l.startswith("IMPORTS")]
+        self.assertEqual(len(import_lines), 2)
+        self.assertIn("os @L1-1", import_lines[0])
+        self.assertIn("sys @L8-8", import_lines[1])
+
 
 if __name__ == "__main__":
     unittest.main()
