@@ -395,7 +395,7 @@ def _function_lines(s: Symbol, level: int, tier: str, faults: list) -> list:
              f"@L{s.span[0]}-{s.span[1]} ^{s.slice8} ~{tier}"]
     if s.decorators:
         lines.append("  DECORATORS " + ", ".join(s.decorators))
-    if s.calls:
+    if s.calls and level <= 2:
         shown = s.calls[:25]
         extra = f" …+{len(s.calls) - 25}" if len(s.calls) > 25 else ""
         lines.append("  CALLS " + ", ".join(shown) + extra)
