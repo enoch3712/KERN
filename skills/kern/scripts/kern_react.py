@@ -194,7 +194,9 @@ def _extract_hooks(body, react, ntext, flow_fn):
                 else:
                     hooks.append(HookUse("HOOK", f"{name_txt}={bound(ntext(value, 120))}", line, risk))
         elif stmt.type == "expression_statement" and stmt.named_children:
-            value = stmt.named_children[0]
+            value = _unwrap_parens(stmt.named_children[0])
+            if value is None:
+                continue
             if value.type in COND_EXPR_TYPES:
                 _fault_conditional_hooks(value, faults, ntext)
                 continue
@@ -258,7 +260,7 @@ def _jsx_name(el, ntext):
 
 def _jsx_attrs(el, ntext):
     """(attrs_text, spread_only, event_attrs) from an element's opening tag.
-    event_attrs: list of (attr_name, expr_node, element_name_text)."""
+    event_attrs: list of (attr_name, value_node) pairs."""
     opening = el
     if el.type == "jsx_element":
         opening = el.named_children[0] if el.named_children else el

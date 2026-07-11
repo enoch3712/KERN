@@ -188,6 +188,13 @@ class TestHooks(unittest.TestCase):
         faults = self.component(src).react["faults"]
         self.assertIn("conditional-hook", [f[0] for f in faults])
 
+    def test_paren_wrapped_guarded_hook_faulted(self):
+        src = ("function T({ on }) {\n"
+               "  (on && useHook());\n"
+               "  return <div />;\n}\n")
+        faults = self.component(src).react["faults"]
+        self.assertIn("conditional-hook", [f[0] for f in faults])
+
     def test_ternary_guarded_hook_faulted(self):
         src = ("function T({ on }) {\n"
                "  on ? useState(0) : null;\n"

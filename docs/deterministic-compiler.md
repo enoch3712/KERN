@@ -417,8 +417,8 @@ inherited verbatim.
 
 `parse_tsjs(text, dialect: str)` takes `"js" | "ts" | "tsx"` instead of a
 `typescript: bool`. Both call sites (`kern_cache.py` compile and verify paths)
-use it. The `generator=` header line reports `frontend=tree-sitter+react` when
-the adapter fires, and plain `frontend=tree-sitter` otherwise — a strict no-op
+use it. The `generator=` header line reports `lang=tsx frontend=tree-sitter+react`
+when the adapter fires, and plain `frontend=tree-sitter` otherwise — a strict no-op
 on non-component code, verified by `TestNoOpOnPlainCode` in `tests/test_react.py`.
 
 A symbol is upgraded to `kind="component"` when it is a function declaration,
@@ -476,7 +476,10 @@ Rules:
   - Capitalized JSX names are component dependencies; names that match imports
     cross-link naturally through the existing import lines
 - Non-hook, non-render statements in the component body flow through the
-  existing L3 flow-op rendering unchanged.
+  existing L3 flow-op rendering unchanged (hook calls are skipped there —
+  they already surface as STATE/CTX/REF/HOOK/EFFECT heads). Components also
+  emit the same `EFFECTS` provenance line as plain functions (effect classes
+  plus `unknown-calls=N`) at L2 and L3.
 - All line math is `\n`-only, matching the repo rule (never `str.splitlines()`).
 
 ### Tier mapping
@@ -484,8 +487,8 @@ Rules:
 | Tier | Component detail |
 | --- | --- |
 | L1 | `COMPONENT name (props) span #hash` — one line, like current FN heads |
-| L2 | + STATE/CTX/REF/HOOK/EFFECT/EVENT heads; RENDER collapsed to components-only tree (host elements and attributes dropped; IF/FOR structure kept) |
-| L3 | Full render tree with attributes, effect bodies and handler bodies via `flow()` |
+| L2 | + STATE/CTX/REF/HOOK/EFFECT/EVENT heads and the `EFFECTS` provenance line; RENDER collapsed to components-only tree (host elements and attributes dropped; IF/FOR structure kept) |
+| L3 | Full render tree with attributes, effect bodies, handler bodies, and non-hook body statements via `flow()` |
 
 ### Faulting
 
