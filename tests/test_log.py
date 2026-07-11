@@ -64,6 +64,26 @@ class TestOperationLogging(unittest.TestCase):
         self.assertIn("error", entry)
         self.assertTrue(entry["error"])
 
+    def test_error_log_never_contains_credential_shaped_content(self):
+        ensure_result = run_cli("--repo", str(self.root), "ensure", "big.py")
+        self.assertEqual(ensure_result.returncode, 0, ensure_result.stderr)
+        ensured = json.loads(ensure_result.stdout)
+        baseline = Path(ensured["ir"]).read_text()
+        source_sha = ensured["source_sha256"]
+
+        staging = self.root / "staging.kern-il.txt"
+        staging.write_text(baseline + "\nENRICHMENT model=m\nDB_PASSWORD=hunter2secretvalue\n")
+
+        commit_result = run_cli(
+            "--repo", str(self.root), "commit", "big.py",
+            "--ir-file", str(staging), "--source-sha", source_sha,
+        )
+        self.assertEqual(commit_result.returncode, 2)
+        self.assertNotIn("hunter2secretvalue", commit_result.stderr)
+
+        log_contents = (self.root / ".kern" / "log.jsonl").read_text()
+        self.assertNotIn("hunter2secretvalue", log_contents)
+
 
 class TestLogCommand(unittest.TestCase):
     def setUp(self):
@@ -97,6 +117,21 @@ class TestLogCommand(unittest.TestCase):
         for line in lines:
             entry = json.loads(line)
             self.assertEqual(entry["op"], "ensure")
+
+    def test_log_event_does_not_raise_on_non_serializable_field(self):
+        # A set is not JSON serializable; log_event must swallow the resulting
+        # TypeError rather than letting it abort the command.
+        try:
+            kern_cache.log_event(
+                self.paths, {"ts": "2026-01-01T00:00:00Z", "op": "ensure", "ok": True, "weird": {1, 2, 3}}
+            )
+        except Exception as exc:  # pragma: no cover - failure path
+            self.fail(f"log_event raised unexpectedly: {exc!r}")
+
+    def test_read_log_entries_tail_zero_is_empty(self):
+        self.seed_log()
+        entries = kern_cache.read_log_entries(self.paths, tail=0, op_filter=None)
+        self.assertEqual(entries, [])
 
     def test_log_human_table_and_empty(self):
         result = run_cli("--repo", str(self.root), "log")

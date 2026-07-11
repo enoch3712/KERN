@@ -595,11 +595,13 @@ def commit_file(
             if not appended_lines[0].startswith("ENRICHMENT model="):
                 raise ValueError("Appended section must start with 'ENRICHMENT model=<name>'")
             for line in appended_lines:
-                if SECRET_VALUE.search(line):
+                if SECRET_VALUE.search(line) or (SECRET_NAME.search(line) and re.search(r"[:=]", line)):
                     raise ValueError("Enrichment line contains a likely credential")
             for line in appended_lines[1:]:
                 if line.strip() and not line.startswith("INTENT "):
-                    raise ValueError(f"Enrichment may only append INTENT lines, found: {line[:60]!r}")
+                    raise ValueError(
+                        f"Enrichment may only append INTENT lines, found: {redact_line(line)[:60]!r}"
+                    )
         payload = payload.rstrip(b"\n") + b"\n"
         atomic_write(artifacts["ir"], payload)
         if sha256_file(source) != expected_sha:
@@ -860,7 +862,7 @@ def log_event(paths: dict[str, Path], entry: dict[str, Any]) -> None:
     try:
         with paths["log"].open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, sort_keys=True) + "\n")
-    except OSError:
+    except (OSError, TypeError, ValueError):
         pass
 
 
@@ -878,11 +880,9 @@ def ensure_log_fields(
     """Extra telemetry for the ensure command: tier and cheap token estimates."""
     fields: dict[str, Any] = {}
     try:
-        tier = result.get("tier")
-        if tier is None:
-            manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
-            record = manifest.get("files", {}).get(relative, {})
-            tier = record.get("ir_tier")
+        manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+        record = manifest.get("files", {}).get(relative, {})
+        tier = record.get("ir_tier")
         if tier is not None:
             fields["tier"] = tier
     except (OSError, json.JSONDecodeError):
@@ -919,7 +919,7 @@ def read_log_entries(paths: dict[str, Path], tail: int, op_filter: str | None) -
     except OSError:
         return []
     if tail is not None and tail >= 0:
-        entries = entries[-tail:]
+        entries = entries[-tail:] if tail > 0 else []
     return entries
 
 
@@ -1050,15 +1050,16 @@ def main() -> int:
         return 0
     except Exception as exc:
         if paths is not None:
-            log_event(
-                paths,
-                {
-                    "ts": now_iso(),
-                    "op": getattr(args, "command", "?"),
-                    "ok": False,
-                    "error": str(exc),
-                },
-            )
+            error_entry: dict[str, Any] = {
+                "ts": now_iso(),
+                "op": getattr(args, "command", "?"),
+                "ok": False,
+                "error": redact_line(str(exc)),
+            }
+            source_rel = getattr(args, "file", None)
+            if source_rel is not None:
+                error_entry["source_rel"] = source_rel
+            log_event(paths, error_entry)
         json.dump({"ok": False, "error": str(exc), "type": exc.__class__.__name__}, sys.stderr, indent=2)
         sys.stderr.write("\n")
         return 2
