@@ -355,9 +355,11 @@ def parse_python(text: str) -> ModuleIR:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             names = ",".join(_target(t) for t in targets)
             hint = bool(SECRET_NAME.search(names))
-            symbols.append(Symbol(kind="const", name=names,
-                                  detail=expr_text(node.value, 100, hint),
-                                  span=(node.lineno, node.end_lineno or node.lineno)))
+            symbol = Symbol(kind="const", name=names,
+                           detail=expr_text(node.value, 100, hint),
+                           span=(node.lineno, node.end_lineno or node.lineno))
+            symbol.risk = expr_risk(node.value)
+            symbols.append(symbol)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             symbols.append(_function_symbol(node, node.name, text))
         elif isinstance(node, ast.ClassDef):
@@ -371,3 +373,94 @@ def parse_python(text: str) -> ModuleIR:
                 if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     symbols.append(_function_symbol(member, f"{node.name}.{member.name}", text))
     return ModuleIR("python", "pyast", symbols, _omit_counts(text, tree))
+
+
+_TIER_LEVEL = {"L1": 1, "L2": 2, "L3": 3}
+_ELIDED = ("<REDACTED", "…<sha256=", "<STR ")
+
+
+def _render_provenanced(mapping: dict, unknown: int) -> str:
+    parts = []
+    for key in sorted(mapping):
+        vias = mapping[key]
+        parts.append(key + (f" (via {', '.join(sorted(vias))})" if vias else ""))
+    if unknown:
+        parts.append(f"unknown-calls={unknown}")
+    return ", ".join(parts)
+
+
+def _function_lines(s: Symbol, level: int, tier: str, faults: list) -> list:
+    head = "ASYNC F" if s.is_async else "F"
+    lines = [f"{head} {s.name}({s.signature}) -> {s.returns or 'Any'} "
+             f"@L{s.span[0]}-{s.span[1]} ^{s.slice8} ~{tier}"]
+    if s.decorators:
+        lines.append("  DECORATORS " + ", ".join(s.decorators))
+    if s.calls:
+        shown = s.calls[:25]
+        extra = f" …+{len(s.calls) - 25}" if len(s.calls) > 25 else ""
+        lines.append("  CALLS " + ", ".join(shown) + extra)
+    effects = _render_provenanced(s.effects, s.unknown_calls)
+    if effects:
+        lines.append("  EFFECTS " + effects)
+    raises = _render_provenanced(s.raises_all, 0)
+    if raises:
+        lines.append("  RAISES " + raises)
+    if level >= 2:
+        for op in s.flow:
+            pad = "  " * (op.depth + 2)
+            piece = op.op
+            if level == 3 and op.detail:
+                piece += f" {op.detail}"
+            elif level == 2 and op.op in ("CATCH", "NESTED", "CASE") and op.detail:
+                piece += f" {op.detail}"
+            if level == 3 and op.binds:
+                piece += f" -> {op.binds}"
+            risk = op.risk
+            if not risk and level == 3 and any(m in op.detail for m in _ELIDED):
+                risk = "elided-literal"
+            if risk:
+                piece += f" !FAULT({risk})"
+                faults.append(f"{risk}(L{op.line})")
+            lines.append(pad + piece)
+    return lines
+
+
+def emit_il(module: ModuleIR, source_rel: str, source_sha256: str,
+            repo_revision: str = "none", tier: str = "L2") -> str:
+    level = _TIER_LEVEL[tier]
+    propagate(module)
+    out = [
+        "KERN-IL/0.2",
+        f"source_rel={source_rel}",
+        f"source_sha256={source_sha256}",
+        f"repo_revision={repo_revision}",
+        f"generator={GENERATOR} lang={module.lang} frontend={module.frontend} tier={tier}",
+        "",
+    ]
+    faults: list[str] = []
+    imports = [s for s in module.symbols if s.kind == "import"]
+    if imports:
+        lo = min(s.span[0] for s in imports)
+        hi = max(s.span[1] for s in imports)
+        out.append(f"IMPORTS {'; '.join(s.detail for s in imports)} @L{lo}-{hi}")
+    for s in module.symbols:
+        if s.kind == "const":
+            tag = ""
+            if s.risk:
+                tag = f" !FAULT({s.risk})"
+                faults.append(f"{s.risk}(L{s.span[0]})")
+            out.append(f"C {s.name}={s.detail} @L{s.span[0]}{tag}")
+    for s in module.symbols:
+        if s.kind == "class":
+            out.extend(["", f"CLASS {s.name}({s.bases}) @L{s.span[0]}-{s.span[1]} ^{s.slice8}"])
+        elif s.kind == "function":
+            out.append("")
+            out.extend(_function_lines(s, level, tier, faults))
+    omit = " ".join(f"{k}={v}" for k, v in sorted(module.omit.items()))
+    out.extend([
+        "",
+        f"OMIT {omit} bodies-tier={tier}",
+        "FAULT-BEFORE edit(any), exact-literals"
+        + "".join(f", {f}" for f in dict.fromkeys(faults)),
+    ])
+    return "\n".join(out).rstrip() + "\n"
