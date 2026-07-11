@@ -61,6 +61,25 @@ class TestTokenBench(unittest.TestCase):
         row = token_bench.bench_file(f)
         self.assertEqual(row["fidelity_missing"], [])
 
+    def test_fidelity_flags_suffix_collision(self):
+        f = self.tmp / "suffix.py"
+        f.write_text(
+            '"""Doc."""\n\n'
+            "def foobar(x):\n    return x\n\n\n"
+            "def bar(x):\n    return x\n"
+        )
+        text = f.read_text()
+        module = token_bench.kern_compile.parse_python(text)
+        il = token_bench.kern_compile.emit_il(module, "x.py", "0" * 64, "none", "L2")
+        # Drop bar's own F-line, leaving only "F foobar(" in the IL. The tail
+        # "bar" is a strict suffix of "foobar" but not the full final name
+        # segment, so it must not count as present.
+        il_without_bar = "\n".join(
+            l for l in il.splitlines() if not l.startswith("F bar(")
+        )
+        missing = token_bench.fidelity_missing(module, il_without_bar)
+        self.assertIn("bar", missing)
+
 
 if __name__ == "__main__":
     unittest.main()

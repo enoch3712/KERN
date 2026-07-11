@@ -120,6 +120,18 @@ class TestEmitter(unittest.TestCase):
         f_block = il3.split("F load_entry")[1].split("\n\n")[0]
         self.assertNotIn("CALLS path.read_bytes", f_block)
 
+    def test_l3_short_call_name_not_falsely_covered(self):
+        src = (
+            "def f(y):\n"
+            "    pos = at(y) + 1\n"
+            "    return format(y)\n"
+        )
+        mod = kern_compile.parse_python(src)
+        il3 = kern_compile.emit_il(mod, "src/x.py", "a" * 64, "none", "L3")
+        f_block = il3.split("F f(")[1]
+        self.assertIn("CALLS", f_block)
+        self.assertIn("at", [c.strip() for c in f_block.split("CALLS")[1].splitlines()[0].split(",")])
+
 
 if __name__ == "__main__":
     unittest.main()

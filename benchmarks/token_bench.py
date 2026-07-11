@@ -31,7 +31,7 @@ def fidelity_missing(module, il: str) -> list[str]:
         if symbol.kind != "function":
             continue
         tail = symbol.name.split(".")[-1]
-        pattern = rf"^(?:ASYNC )?F .*{re.escape(tail)}\("
+        pattern = rf"^(?:ASYNC )?F (?:[\w.]+\.)?{re.escape(tail)}\("
         if re.search(pattern, il, re.MULTILINE) is None:
             missing.append(symbol.name)
     return missing

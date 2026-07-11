@@ -402,7 +402,10 @@ def _function_lines(s: Symbol, level: int, tier: str, faults: list) -> list:
             lines.append("  CALLS " + ", ".join(shown) + extra)
     else:
         covered = "\n".join(op.detail for op in s.flow)
-        leftover = [c for c in s.calls if c not in covered]
+        leftover = [
+            c for c in s.calls
+            if not re.search(rf"(?<![\w.]){re.escape(c)}\s*\(", covered)
+        ]
         if leftover:
             shown = leftover[:25]
             extra = f" …+{len(leftover) - 25}" if len(leftover) > 25 else ""
