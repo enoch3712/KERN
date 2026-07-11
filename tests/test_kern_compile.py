@@ -205,6 +205,12 @@ class TestFlowOps(unittest.TestCase):
         ret = next(o for o in next(s for s in mod.symbols if s.name == "f").flow if o.op == "RET")
         self.assertEqual(ret.risk, "math")
 
+    def test_call_risk_outranks_math(self):
+        src = "import hashlib\n\ndef f(a):\n    return foo(a) ** hashlib.sha256(a).digest()\n"
+        mod = kern_compile.parse_python(src)
+        ret = next(o for o in next(s for s in mod.symbols if s.name == "f").flow if o.op == "RET")
+        self.assertEqual(ret.risk, "crypto")
+
 
 if __name__ == "__main__":
     unittest.main()

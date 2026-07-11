@@ -147,6 +147,8 @@ _TRY_TYPES = (ast.Try, getattr(ast, "TryStar", ast.Try))
 def expr_risk(node: ast.AST | None) -> str:
     if node is None:
         return ""
+
+    # First pass: check for call-based risks (regex, crypto, concurrency)
     for ch in ast.walk(node):
         if isinstance(ch, ast.Call):
             try:
@@ -163,8 +165,12 @@ def expr_risk(node: ast.AST | None) -> str:
                 continue
             if fn.startswith(("threading.", "asyncio.", "multiprocessing.")):
                 return "concurrency"
-        elif isinstance(ch, ast.BinOp) and isinstance(ch.op, (ast.Pow, ast.LShift, ast.RShift)):
+
+    # Second pass: check for math risks (only if no call-based risks found)
+    for ch in ast.walk(node):
+        if isinstance(ch, ast.BinOp) and isinstance(ch.op, (ast.Pow, ast.LShift, ast.RShift)):
             return "math"
+
     return ""
 
 
