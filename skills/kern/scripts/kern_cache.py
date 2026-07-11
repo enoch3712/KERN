@@ -574,6 +574,20 @@ def commit_file(
         raise ValueError("Staging IR does not declare the expected source_rel")
     if not headers.get("generator"):
         raise ValueError("Staging IR does not declare a generator")
+    baseline_path = artifact_paths(paths, relative)["ir"]
+    if not baseline_path.is_file():
+        raise ValueError("No deterministic baseline IL exists; run ensure before commit")
+    baseline_text = baseline_path.read_text(encoding="utf-8")
+    if not text.startswith(baseline_text.rstrip("\n")):
+        raise ValueError("Enrichment must preserve the deterministic IL verbatim as a prefix")
+    appended = text[len(baseline_text.rstrip("\n")):].strip("\n")
+    if appended:
+        appended_lines = appended.splitlines()
+        if not appended_lines[0].startswith("ENRICHMENT model="):
+            raise ValueError("Appended section must start with 'ENRICHMENT model=<name>'")
+        for line in appended_lines[1:]:
+            if line.strip() and not line.startswith("INTENT "):
+                raise ValueError(f"Enrichment may only append INTENT lines, found: {line[:60]!r}")
     artifacts = artifact_paths(paths, relative)
     atomic_write(artifacts["ir"], payload)
     if sha256_file(source) != expected_sha:
