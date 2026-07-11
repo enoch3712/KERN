@@ -172,6 +172,27 @@ class TestHooks(unittest.TestCase):
         faults = self.component(src).react["faults"]
         self.assertIn("conditional-hook", [f[0] for f in faults])
 
+    def test_logical_and_guarded_hook_faulted(self):
+        src = ("function T({ on }) {\n"
+               "  on && useEffect(() => {});\n"
+               "  return <div />;\n}\n")
+        faults = self.component(src).react["faults"]
+        self.assertIn("conditional-hook", [f[0] for f in faults])
+
+    def test_ternary_guarded_hook_faulted(self):
+        src = ("function T({ on }) {\n"
+               "  on ? useState(0) : null;\n"
+               "  return <div />;\n}\n")
+        faults = self.component(src).react["faults"]
+        self.assertIn("conditional-hook", [f[0] for f in faults])
+
+    def test_plain_toplevel_call_not_faulted(self):
+        src = ("function T() {\n"
+               "  analytics.track(useContextValue());\n"
+               "  return <div />;\n}\n")
+        faults = self.component(src).react["faults"]
+        self.assertEqual(faults, [])
+
 
 if __name__ == "__main__":
     unittest.main()

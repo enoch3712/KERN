@@ -99,11 +99,8 @@ def _extract_props(fn_node, ntext) -> list:
     return [ntext(first, 60)]
 
 
-BUILTIN_STATE = {"useState", "useReducer"}
 EFFECT_HOOKS = {"useEffect", "useLayoutEffect"}
-COND_TYPES = {"if_statement", "for_statement", "for_in_statement",
-              "while_statement", "do_statement", "switch_statement",
-              "ternary_expression", "binary_expression"}
+COND_EXPR_TYPES = {"binary_expression", "ternary_expression"}
 
 
 def _call_parts(value, ntext):
@@ -153,6 +150,9 @@ def _extract_hooks(body, react, ntext, flow_fn):
                     hooks.append(HookUse("HOOK", f"{name_txt}={ntext(value, 120)}", line, risk))
         elif stmt.type == "expression_statement" and stmt.named_children:
             value = stmt.named_children[0]
+            if value.type in COND_EXPR_TYPES:
+                _fault_conditional_hooks(value, faults, ntext)
+                continue
             callee, args = _call_parts(value, ntext)
             if callee is None:
                 continue
