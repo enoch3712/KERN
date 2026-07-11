@@ -79,13 +79,16 @@ Prefer the `dense` image profile: 10 px, four columns, lossless WebP. Do not use
 
 Before editing any symbol read from IL or an image, verify its source-map handle:
 
-    python3 <skill-root>/scripts/kern_cache.py --repo <repo> verify path/to/file \
-      --symbol <qualified-name> --hash <slice-hash> [--span L<a>-L<b>]
+```bash
+python3 <skill-root>/scripts/kern_cache.py --repo <repo> verify path/to/file \
+  --symbol <qualified-name> --hash <slice-hash> [--span L<a>-L<b>]
+```
 
 `ok` — proceed. `moved` — same bytes at a new span; use the returned span.
 `stale` — the symbol changed; the IL page is invalid, fault exact source.
-Lines tagged `!FAULT(reason)` (regex, math, concurrency, elided-literal) may not
+Lines tagged `!FAULT(reason)` (regex, crypto, math, concurrency, elided-literal) may not
 support a claim or an edit without an exact-source fault, regardless of verify.
+verify supports Python always and JavaScript/TypeScript when tree-sitter is installed; for other formats use fault with --expect-sha.
 
 ```bash
 python3 <skill-root>/scripts/kern_cache.py --repo <repo> fault path/to/file \
