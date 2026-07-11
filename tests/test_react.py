@@ -117,5 +117,61 @@ class TestComponentDetection(unittest.TestCase):
         self.assertEqual(self.sym(mod, "Outer").kind, "function")
 
 
+@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+class TestHooks(unittest.TestCase):
+    def component(self, src):
+        mod = kern_compile.parse_tsjs(src, dialect="tsx")
+        return next(s for s in mod.symbols if s.kind == "component")
+
+    def hooks(self, src):
+        return self.component(src).react["hooks"]
+
+    def test_usestate_setter_and_init(self):
+        s = self.component(TSX_SAMPLE)
+        h = [x for x in s.react["hooks"] if x.kind == "STATE"]
+        self.assertEqual(h[0].detail, "open=false")
+        self.assertEqual(s.react["setters"], {"setOpen": "open"})
+
+    def test_effect_deps_verbatim(self):
+        h = [x for x in self.hooks(TSX_SAMPLE) if x.kind == "EFFECT"]
+        self.assertEqual(h[0].detail, "deps=[user.id]")
+        self.assertTrue(h[0].flow)  # body captured for L3
+
+    def test_effect_missing_deps(self):
+        src = ("function T() {\n  useEffect(() => { tick(); });\n"
+               "  return <div />;\n}\n")
+        h = [x for x in self.hooks(src) if x.kind == "EFFECT"]
+        self.assertEqual(h[0].detail, "deps=EVERY-RENDER")
+
+    def test_reducer_context_ref_custom(self):
+        src = ("function T() {\n"
+               "  const [state, dispatch] = useReducer(reducer, init);\n"
+               "  const theme = useContext(ThemeContext);\n"
+               "  const inputRef = useRef(null);\n"
+               "  const data = useUserData(id);\n"
+               "  return <div />;\n}\n")
+        kinds = [(h.kind, h.detail) for h in self.hooks(src)]
+        self.assertEqual(kinds, [
+            ("STATE", "[state, dispatch]=useReducer(reducer, init)"),
+            ("CTX", "theme=useContext(ThemeContext)"),
+            ("REF", "inputRef"),
+            ("HOOK", "data=useUserData(id)"),
+        ])
+
+    def test_aliased_hook_faulted(self):
+        src = ("import * as R from 'react';\n"
+               "function T() {\n  const [a, setA] = R.useState(0);\n"
+               "  return <div />;\n}\n")
+        h = self.hooks(src)[0]
+        self.assertEqual(h.risk, "aliased-hook")
+
+    def test_conditional_hook_faulted(self):
+        src = ("function T({ on }) {\n"
+               "  if (on) { useEffect(() => {}); }\n"
+               "  return <div />;\n}\n")
+        faults = self.component(src).react["faults"]
+        self.assertIn("conditional-hook", [f[0] for f in faults])
+
+
 if __name__ == "__main__":
     unittest.main()

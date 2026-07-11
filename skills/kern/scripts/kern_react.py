@@ -99,6 +99,99 @@ def _extract_props(fn_node, ntext) -> list:
     return [ntext(first, 60)]
 
 
+BUILTIN_STATE = {"useState", "useReducer"}
+EFFECT_HOOKS = {"useEffect", "useLayoutEffect"}
+COND_TYPES = {"if_statement", "for_statement", "for_in_statement",
+              "while_statement", "do_statement", "switch_statement",
+              "ternary_expression", "binary_expression"}
+
+
+def _call_parts(value, ntext):
+    """(callee_text, args_nodes) for a call_expression, else (None, [])."""
+    if value is None or value.type != "call_expression":
+        return None, []
+    callee = value.child_by_field_name("function")
+    args = value.child_by_field_name("arguments")
+    return (ntext(callee, 80) if callee is not None else None,
+            list(args.named_children) if args is not None else [])
+
+
+def _extract_hooks(body, react, ntext, flow_fn):
+    hooks, setters, faults = react["hooks"], {}, react["faults"]
+    for stmt in body.named_children:
+        line = stmt.start_point[0] + 1
+        if stmt.type in ("lexical_declaration", "variable_declaration"):
+            for d in stmt.named_children:
+                if d.type != "variable_declarator":
+                    continue
+                name_node = d.child_by_field_name("name")
+                value = d.child_by_field_name("value")
+                callee, args = _call_parts(value, ntext)
+                if callee is None:
+                    continue
+                tail = callee.split(".")[-1]
+                if not HOOK_RE.match(tail):
+                    continue
+                risk = "aliased-hook" if "." in callee else ""
+                if risk:
+                    faults.append((risk, line))
+                name_txt = ntext(name_node, 60)
+                if tail == "useState" and name_node.type == "array_pattern":
+                    elems = [ntext(e, 40) for e in name_node.named_children]
+                    state = elems[0] if elems else "?"
+                    init = ntext(args[0], 80) if args else "undefined"
+                    if len(elems) > 1:
+                        setters[elems[1]] = state
+                    hooks.append(HookUse("STATE", f"{state}={init}", line, risk))
+                elif tail == "useReducer":
+                    hooks.append(HookUse("STATE", f"{name_txt}={ntext(value, 120)}", line, risk))
+                elif tail == "useContext":
+                    hooks.append(HookUse("CTX", f"{name_txt}={ntext(value, 80)}", line, risk))
+                elif tail == "useRef":
+                    hooks.append(HookUse("REF", name_txt, line, risk))
+                else:
+                    hooks.append(HookUse("HOOK", f"{name_txt}={ntext(value, 120)}", line, risk))
+        elif stmt.type == "expression_statement" and stmt.named_children:
+            value = stmt.named_children[0]
+            callee, args = _call_parts(value, ntext)
+            if callee is None:
+                continue
+            tail = callee.split(".")[-1]
+            if tail in EFFECT_HOOKS:
+                risk = "aliased-hook" if "." in callee else ""
+                if risk:
+                    faults.append((risk, line))
+                deps = f"deps={ntext(args[1], 100)}" if len(args) >= 2 else "deps=EVERY-RENDER"
+                ops = []
+                if args and args[0].type in ("arrow_function", "function_expression"):
+                    cb_body = args[0].child_by_field_name("body")
+                    if cb_body is not None and cb_body.type == "statement_block":
+                        ops = flow_fn(cb_body)
+                hooks.append(HookUse("EFFECT", deps, line, risk, flow=ops))
+            elif HOOK_RE.match(tail):
+                risk = "aliased-hook" if "." in callee else ""
+                if risk:
+                    faults.append((risk, line))
+                hooks.append(HookUse("HOOK", ntext(value, 120), line, risk))
+        else:
+            _fault_conditional_hooks(stmt, faults, ntext)
+    react["setters"] = setters
+
+
+def _fault_conditional_hooks(node, faults, ntext):
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type in FN_TYPES or n.type in JSX_TYPES:
+            continue
+        if n.type == "call_expression":
+            callee = n.child_by_field_name("function")
+            txt = ntext(callee, 80) if callee is not None else ""
+            if HOOK_RE.match(txt.split(".")[-1] or ""):
+                faults.append(("conditional-hook", n.start_point[0] + 1))
+        stack.extend(n.named_children)
+
+
 def lower_components(fn_nodes, ntext, flow_fn) -> bool:
     upgraded = False
     for sym, node in fn_nodes:
@@ -114,5 +207,10 @@ def lower_components(fn_nodes, ntext, flow_fn) -> bool:
             "render": [],
             "faults": [],
         }
+        body = node.child_by_field_name("body")
+        if body is not None and body.type == "statement_block":
+            _extract_hooks(body, sym.react, ntext, flow_fn)
+        else:
+            sym.react["setters"] = {}
         upgraded = True
     return upgraded
