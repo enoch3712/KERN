@@ -1,0 +1,10 @@
+node_modules/
+__pycache__/
+*.py[cod]
+.next/
+.open-next/
+out/
+.kern/
+.wrangler/
+.DS_Store
+npm-debug.log*

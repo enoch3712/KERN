@@ -1,0 +1,16 @@
+{
+  "name": "kern",
+  "owner": {
+    "name": "KERN contributors"
+  },
+  "metadata": {
+    "description": "The open-source KERN context compiler and semantic-IR workflow for coding agents."
+  },
+  "plugins": [
+    {
+      "name": "kern",
+      "source": "./",
+      "description": "Compile repositories into compact, verified KERN IL for coding agents."
+    }
+  ]
+}

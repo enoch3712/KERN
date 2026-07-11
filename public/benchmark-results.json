@@ -1,0 +1,107 @@
+{
+  "date": "2026-07-10",
+  "source": {
+    "sha256": "3545e7a955fcc961907d66f077999917739a5f95cf02b97491dbfb01c579dd96",
+    "bytes": 188606,
+    "characters": 188329,
+    "lines": 3704,
+    "o200k_text_tokens_estimate": 36674,
+    "security_note": "One hard-coded API credential was detected and redacted from all IR and image outputs."
+  },
+  "semantic_ir": {
+    "characters_without_answer_key": 23176,
+    "lines_without_answer_key": 349,
+    "o200k_text_tokens_estimate": 5795,
+    "compression_vs_raw_tokens": 6.3286,
+    "reduction_vs_raw_tokens_percent": 84.2,
+    "generator": "Model-assisted semantic compression pilot; output was independently verified against authoritative source"
+  },
+  "image_accounting": {
+    "method": "ceil(width/32) * ceil(height/32) per page at original detail; sparse final pages cropped to 32-pixel boundaries",
+    "reference": "https://developers.openai.com/api/docs/guides/images-vision",
+    "format_note": "Pixel dimensions determine image tokens. File format and byte size do not change image-token count when dimensions are unchanged."
+  },
+  "variants": [
+    {
+      "name": "ultra",
+      "font_px": 9,
+      "columns": 5,
+      "pages": 2,
+      "image_tokens_estimate": 2544,
+      "lossless_webp_bytes": 180826,
+      "compression_vs_raw_tokens": 14.4159,
+      "fidelity_gate": "DRIFT",
+      "errors": [
+        "Misread [1,4,71] as [1,4,7]",
+        "Invented HTTP status 500 in the retry set"
+      ]
+    },
+    {
+      "name": "dense",
+      "font_px": 10,
+      "columns": 4,
+      "pages": 2,
+      "image_tokens_estimate": 2877,
+      "lossless_webp_bytes": 183840,
+      "compression_vs_raw_tokens": 12.7473,
+      "compression_vs_ir_text_tokens": 2.0143,
+      "fidelity_gate": "CLEAR",
+      "recommendation": "Best observed quality/token tradeoff in this pilot"
+    },
+    {
+      "name": "balanced",
+      "font_px": 13,
+      "columns": 3,
+      "pages": 2,
+      "image_tokens_estimate": 5000,
+      "lossless_webp_bytes": 239362,
+      "compression_vs_raw_tokens": 7.3348,
+      "compression_vs_ir_text_tokens": 1.159,
+      "fidelity_gate": "CLEAR"
+    },
+    {
+      "name": "safe",
+      "font_px": 16,
+      "columns": 2,
+      "pages": 4,
+      "image_tokens_estimate": 7734,
+      "lossless_webp_bytes": 340576,
+      "compression_vs_raw_tokens": 4.7419,
+      "compression_vs_ir_text_tokens": 0.7493,
+      "fidelity_gate": "CLEAR",
+      "note": "Costs more tokens than sending the semantic IR as text"
+    }
+  ],
+  "haystack": {
+    "selection": "Five exact facts selected by the compression subagent and independently verified against raw source before testing",
+    "answer_key_removed_before_rendering": true,
+    "questions": [
+      "Minimum Abacus SDK version vector",
+      "Actual and contradictory documented PDF-render DPI defaults",
+      "Color-cache file-size and mtime recreation thresholds",
+      "Maximum color-analysis pages and workers",
+      "Remote PPTX retry attempts, initial backoff, and transient HTTP statuses"
+    ],
+    "limitation": "This is a small compressor-selected retrieval test, not an independent or patch-correctness benchmark."
+  },
+  "fresh_subagent_runs": {
+    "model": "gpt-5.6-sol",
+    "dense": {
+      "fidelity_gate": "CLEAR",
+      "model_turns": 4,
+      "cumulative_input_tokens": 73403,
+      "cached_input_tokens": 55296,
+      "uncached_input_tokens": 18107,
+      "note": "Two image reads occurred in separate tool turns and the agent emitted both an interim and final answer, inflating cumulative input."
+    },
+    "balanced": {
+      "fidelity_gate": "CLEAR",
+      "model_turns": 2,
+      "cumulative_input_tokens": 35591,
+      "cached_input_tokens": 19968,
+      "uncached_input_tokens": 15623,
+      "note": "Both image pages were loaded in one visual tool call."
+    },
+    "interpretation": "Representation tokens and complete agent-run input are different. Tool turns repeatedly include system/tool context and resident pages; batch page faults."
+  }
+}

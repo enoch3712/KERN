@@ -1,0 +1,25 @@
+{
+  "name": "kern",
+  "version": "0.1.0",
+  "description": "Compile repositories into compact, verified KERN IL and fault exact source before edits.",
+  "author": {
+    "name": "KERN contributors",
+    "url": "https://github.com/enoch3712/KERN"
+  },
+  "homepage": "https://enoch3712.github.io/KERN/",
+  "repository": "https://github.com/enoch3712/KERN",
+  "license": "Apache-2.0",
+  "keywords": ["code", "context", "compression", "intermediate-language", "agents"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "KERN",
+    "shortDescription": "Compile code for machine attention.",
+    "longDescription": "KERN maintains a lazy semantic mirror of a repository, keeps cold context compact, and requires exact-source page faults before writes.",
+    "developerName": "KERN contributors",
+    "category": "Productivity",
+    "capabilities": [],
+    "websiteURL": "https://enoch3712.github.io/KERN/",
+    "defaultPrompt": "Use KERN to scan this repository, compile the smallest relevant working set into KERN IL, and fault exact source before making changes.",
+    "brandColor": "#B7FF5B"
+  }
+}

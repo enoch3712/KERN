@@ -1,0 +1,4 @@
+interface:
+  display_name: "KERN"
+  short_description: "Lazy semantic code paging and exact-source faults"
+  default_prompt: "Use $kern to compile this repository into compact KERN IL, page in only relevant context, and fault exact source before edits."

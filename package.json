@@ -1,0 +1,22 @@
+{
+  "name": "kern-il-context-compiler",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "build:sites": "npm run build && node scripts/build-sites.mjs",
+    "preview:sites": "wrangler dev"
+  },
+  "dependencies": {
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "wrangler": "4.110.0"
+  },
+  "overrides": {
+    "postcss": "8.5.16"
+  }
+}

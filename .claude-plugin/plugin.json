@@ -1,0 +1,10 @@
+{
+  "name": "kern",
+  "description": "The context compiler for coding agents.",
+  "version": "0.1.0",
+  "repository": "https://github.com/enoch3712/KERN",
+  "homepage": "https://enoch3712.github.io/KERN/",
+  "license": "Apache-2.0",
+  "skills": "./skills/",
+  "agents": ["./agents/claude/kern-compiler.md"]
+}

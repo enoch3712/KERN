@@ -1,0 +1,21 @@
+{
+  "name": "kern",
+  "interface": {
+    "displayName": "KERN"
+  },
+  "plugins": [
+    {
+      "name": "kern",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/enoch3712/KERN.git",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
