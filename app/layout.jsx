@@ -1,15 +1,37 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "KERN — Compile code for machine attention",
+  title: {
+    default: "KERN — Compile repositories for machine attention",
+    template: "%s — KERN",
+  },
   description:
-    "A vendor-neutral intermediate language and context runtime for coding agents: language compilation, visual cold pages, and exact-source page faults.",
+    "A lazy, content-addressed context compiler for large codebases, with exact-source page faults before every write.",
   metadataBase: new URL("https://enoch3712.github.io/KERN/"),
+  alternates: {
+    canonical: "./",
+  },
+  icons: {
+    icon: [{ url: "https://enoch3712.github.io/KERN/kern-mark.svg", type: "image/svg+xml" }],
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
   openGraph: {
-    title: "KERN — Less syntax. More software.",
+    title: "KERN — Compile repositories for machine attention",
     description:
-      "Compile supported programming languages into compact semantic context without giving up exact-source edits.",
+      "Lazy semantic context for large codebases, with an exact-source path before every write.",
     type: "website",
+    url: "./",
+    siteName: "KERN",
+    images: [{ url: "https://enoch3712.github.io/KERN/kern-social.png", width: 1200, height: 630, alt: "KERN — 12.75× smaller selected representation in the pilot" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "KERN — Compile repositories for machine attention",
+    description: "Lazy semantic context for large codebases, with an exact-source path before every write.",
+    images: ["https://enoch3712.github.io/KERN/kern-social.png"],
   },
 };
 

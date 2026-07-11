@@ -42,9 +42,9 @@ curl -fsSL https://raw.githubusercontent.com/enoch3712/KERN/main/templates/codex
   -o ~/.codex/agents/kern-compiler.toml
 ```
 
-Edit `model` and `model_reasoning_effort` in that file to use an economical model available in your workspace. Leave `model` commented to let Codex route dynamically.
+Edit `model` and `model_reasoning_effort` in that file to use an economical model available in your workspace. Leave either field commented to inherit it from the parent session; the other custom-agent fields remain independent.
 
-Official references: [Codex skills](https://developers.openai.com/codex/concepts/customization#skills) and [Codex plugins](https://developers.openai.com/codex/plugins/build).
+Official references: [Codex custom subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents), [Codex skills](https://developers.openai.com/codex/concepts/customization#skills), and [Codex plugins](https://developers.openai.com/codex/plugins/build).
 
 ## Claude Code
 
@@ -102,13 +102,13 @@ Update with:
 git -C ~/.cursor/plugins/local/kern pull --ff-only
 ```
 
-The plugin includes `agents/cursor/kern-compiler.md`. It defaults to `model: fast` for economical compilation and permits writes only through the host's normal approval controls. Pin a specific model identifier exposed by your Cursor workspace when you want predictable cost or latency; availability may depend on client version, plan, and team policy.
+The plugin includes `agents/cursor/kern-compiler.md`. It defaults to `model: fast` for economical compilation and permits writes only through the host's normal approval controls. Set `model: inherit` to follow the parent, or use an exact model identifier exposed by your workspace when you need a verifiable route. Availability and fallback behavior depend on client version, plan, and team policy, so confirm the resolved subagent model in Cursor before relying on a cost or fidelity claim.
 
 Cursor also discovers standalone skills from `.agents/skills/`, `.cursor/skills/`, `~/.agents/skills/`, and `~/.cursor/skills/`. For a project-local install, copy `skills/kern` into `.cursor/skills/kern`.
 
 When KERN is listed in the public marketplace, installation becomes `/add-plugin` followed by selecting KERN.
 
-Official references: [Cursor plugins](https://cursor.com/docs/plugins), [plugin reference](https://cursor.com/docs/reference/plugins), and [Agent Skills](https://cursor.com/docs/skills).
+Official references: [Cursor plugins](https://cursor.com/docs/plugins), [plugin reference](https://cursor.com/docs/reference/plugins), [subagent model configuration](https://cursor.com/docs/subagents#model-configuration), and [Agent Skills](https://cursor.com/docs/skills).
 
 ## Model routing
 

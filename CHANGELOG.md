@@ -8,6 +8,8 @@ All notable changes to KERN are documented here.
 - Verify cached IR digests and exact compiler-worker headers before reuse or commit.
 - Remove private pilot artifacts and identifying benchmark metadata from the public history.
 - Add one-command Codex installation and portable compiler-agent overrides.
+- Refactor the README and website around measured compression evidence, a concrete compiler preview, and provider-first installation docs.
+- Move machine-readable pilot data under `benchmarks/` and publish the full-loop limitations beside the representation result.
 
 ## 0.1.0 — 2026-07-11
 
