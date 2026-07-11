@@ -499,6 +499,28 @@ class TestRedaction(unittest.TestCase):
         self.assertIn('placeholder="type here"', il)
         self.assertNotIn("REDACTED", il)
 
+    def test_event_setter_secret_redacted(self):
+        # data-pad pushes the RET flow op's 100-char raw-text capture past the
+        # onClick handler, isolating this test to the EVENT-line surface
+        # (a separate, pre-existing gap in RET's raw-JSX text capture for
+        # call-form literals is out of scope for this fix).
+        pad = "x" * 80
+        il = self._il('function T() {\n'
+                      '  const [apiToken, setApiToken] = useState("");\n'
+                      f'  return <input data-pad="{pad}" onClick={{() => setApiToken("hunter2-literal")}} />;\n}}\n')
+        self.assertNotIn("hunter2-literal", il)
+
+    def test_event_fallback_secret_redacted(self):
+        il = self._il('function T() {\n'
+                      '  return <input onBlur={() => { const password = "hunter2-ev"; save(password); }} />;\n}\n')
+        self.assertNotIn("hunter2-ev", il)
+
+    def test_effect_body_secret_redacted(self):
+        il = self._il('function T() {\n'
+                      '  useEffect(() => { if (window.token = "hunter2-eff") { save(); } }, []);\n'
+                      '  return <div />;\n}\n')
+        self.assertNotIn("hunter2-eff", il)
+
 
 @unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
 class TestNoOpOnPlainCode(unittest.TestCase):

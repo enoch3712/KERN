@@ -557,13 +557,11 @@ def component_lines(s, level, tier, faults):
             faults.append(f"{h.risk}(L{h.line})")
         lines.append(f"  {h.kind} {h.detail}{tag}")
         if h.kind == "EFFECT" and level >= 3:
-            for op in h.flow:
-                piece = op.op + (f" {op.detail}" if op.detail else "")
-                if op.binds:
-                    piece += f" -> {op.binds}"
-                lines.append("  " * (op.depth + 2) + piece)
+            effect_ops = [replace(op, detail=_scrub_named_secrets(op.detail))
+                          for op in h.flow]
+            lines.extend(flow_lines(s, level, tier, faults, ops=effect_ops))
     for e in r.get("events", []):
-        lines.append(f"  EVENT {e.target} -> {e.action}")
+        lines.append(f"  EVENT {e.target} -> {_scrub_named_secrets(e.action)}")
     effects = _render_provenanced(s.effects, s.unknown_calls)
     if effects:
         lines.append("  EFFECTS " + effects)
