@@ -61,6 +61,19 @@ class TestEnrichmentAppendOnly(unittest.TestCase):
         result = self.commit(self.baseline)
         self.assertEqual(result["status"], "ready")
 
+    def test_two_step_splice_rejected(self):
+        with self.assertRaises(ValueError):
+            self.commit(self.baseline.rstrip("\n"))
+
+    def test_committed_ir_always_ends_with_single_newline(self):
+        staged = self.baseline + "\nENRICHMENT model=test-model\nINTENT fn_0: reads json\n\n\n"
+        self.commit(staged)
+        rel, _ = kern_cache.normalize_rel(self.root, "mod.py")
+        ir_path = kern_cache.artifact_paths(self.paths, rel)["ir"]
+        data = ir_path.read_bytes()
+        self.assertTrue(data.endswith(b"\n"))
+        self.assertFalse(data.endswith(b"\n\n"))
+
 
 if __name__ == "__main__":
     unittest.main()

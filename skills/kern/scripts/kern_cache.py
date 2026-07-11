@@ -580,7 +580,7 @@ def commit_file(
         if not baseline_path.is_file():
             raise ValueError("No deterministic baseline IL exists; run ensure before commit")
         baseline_text = baseline_path.read_text(encoding="utf-8")
-        if text == baseline_text or text == baseline_text.rstrip("\n"):
+        if text == baseline_text:
             appended = ""
         elif text.startswith(baseline_text):
             appended = text[len(baseline_text):].strip("\n")
@@ -593,6 +593,7 @@ def commit_file(
             for line in appended_lines[1:]:
                 if line.strip() and not line.startswith("INTENT "):
                     raise ValueError(f"Enrichment may only append INTENT lines, found: {line[:60]!r}")
+        payload = payload.rstrip(b"\n") + b"\n"
         atomic_write(artifacts["ir"], payload)
         if sha256_file(source) != expected_sha:
             raise RuntimeError("Source changed during KERN IL commit; rerun prepare")
