@@ -141,7 +141,6 @@ _RISK_CALL = [
     ("crypto", re.compile(r"^(hashlib|hmac|secrets)\.")),
     ("concurrency", re.compile(r"^(threading|asyncio|multiprocessing|concurrent)\.")),
 ]
-_RISK_MATH = re.compile(r"(\*\*|<<|>>)")
 _TRY_TYPES = (ast.Try, getattr(ast, "TryStar", ast.Try))
 
 
@@ -164,21 +163,18 @@ def expr_risk(node: ast.AST | None) -> str:
                 continue
             if fn.startswith(("threading.", "asyncio.", "multiprocessing.")):
                 return "concurrency"
-    try:
-        if _RISK_MATH.search(ast.unparse(node)):
+        elif isinstance(ch, ast.BinOp) and isinstance(ch.op, (ast.Pow, ast.LShift, ast.RShift)):
             return "math"
-    except Exception:
-        pass
     return ""
 
 
 def flow_ops(statements: list, depth: int = 0, budget: int = 200) -> list:
     ops: list[FlowOp] = []
 
-    def add(node, op, detail="", binds="", risk=""):
+    def add(node, op, detail="", binds="", risk="", line=None):
         if len(ops) < budget:
             ops.append(FlowOp(op=op, detail=detail, binds=binds, depth=depth,
-                              line=getattr(node, "lineno", 0), risk=risk))
+                              line=line if line is not None else getattr(node, "lineno", 0), risk=risk))
 
     def sub(body):
         return flow_ops(body, depth + 1, budget - len(ops))
@@ -200,7 +196,7 @@ def flow_ops(statements: list, depth: int = 0, budget: int = 200) -> list:
             add(s, "IF", expr_text(s.test, 100), risk=expr_risk(s.test))
             ops.extend(sub(s.body))
             if s.orelse:
-                add(s, "ELSE")
+                add(s, "ELSE", line=s.orelse[0].lineno)
                 ops.extend(sub(s.orelse))
         elif isinstance(s, (ast.For, ast.AsyncFor)):
             add(s, "LOOP", f"{_target(s.target)} in {expr_text(s.iter, 100)}")
@@ -222,7 +218,7 @@ def flow_ops(statements: list, depth: int = 0, budget: int = 200) -> list:
                 add(h, "CATCH", expr_text(h.type, 60))
                 ops.extend(sub(h.body))
             if s.finalbody:
-                add(s, "FINALLY")
+                add(s, "FINALLY", line=s.finalbody[0].lineno)
                 ops.extend(sub(s.finalbody))
         elif isinstance(s, ast.Return):
             add(s, "RET", expr_text(s.value, 100), risk=expr_risk(s.value))

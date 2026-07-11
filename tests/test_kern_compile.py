@@ -174,6 +174,37 @@ class TestFlowOps(unittest.TestCase):
         withs = [o for o in self.proc.flow if o.op == "WITH"]
         self.assertEqual(withs[0].risk, "concurrency")
 
+    def test_else_and_finally_line_attribution(self):
+        src = (
+            "def f(a):\n"
+            "    if a:\n"
+            "        run(a)\n"
+            "    else:\n"
+            "        halt(a)\n"
+            "    try:\n"
+            "        run(a)\n"
+            "    finally:\n"
+            "        halt(a)\n"
+        )
+        mod = kern_compile.parse_python(src)
+        flow = next(s for s in mod.symbols if s.name == "f").flow
+        else_op = next(o for o in flow if o.op == "ELSE")
+        fin_op = next(o for o in flow if o.op == "FINALLY")
+        self.assertEqual(else_op.line, 5)
+        self.assertEqual(fin_op.line, 9)
+
+    def test_math_risk_not_triggered_by_string_contents(self):
+        src = 'def f():\n    return "a ** b << c"\n'
+        mod = kern_compile.parse_python(src)
+        ret = next(o for o in next(s for s in mod.symbols if s.name == "f").flow if o.op == "RET")
+        self.assertEqual(ret.risk, "")
+
+    def test_math_risk_triggered_by_real_operators(self):
+        src = "def f(a, b):\n    return a ** b\n"
+        mod = kern_compile.parse_python(src)
+        ret = next(o for o in next(s for s in mod.symbols if s.name == "f").flow if o.op == "RET")
+        self.assertEqual(ret.risk, "math")
+
 
 if __name__ == "__main__":
     unittest.main()
