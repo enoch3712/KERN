@@ -143,6 +143,67 @@ _RISK_CALL = [
 ]
 _TRY_TYPES = (ast.Try, getattr(ast, "TryStar", ast.Try))
 
+EFFECT_RULES = [
+    ("fs:read", re.compile(
+        r"^(open|fitz\.open|os\.(walk|listdir|stat|scandir)|os\.path\.(exists|isfile|isdir|getsize|getmtime|basename)"
+        r")$|\.(read|readlines|read_text|read_bytes|exists|is_file|is_dir|stat|iterdir|glob)$")),
+    ("fs:write", re.compile(
+        r"^(os\.(replace|remove|makedirs|mkdir|rename|unlink|chmod)|shutil\.\w+|tempfile\.\w+)$"
+        r"|\.(write|writelines|write_text|write_bytes|save|unlink|mkdir|touch|chmod)$")),
+    ("net", re.compile(r"^(requests|urllib|socket|http)\.")),
+    ("proc", re.compile(r"^(subprocess\.\w+|os\.(system|popen|execv|execve|spawnl))$")),
+    ("env", re.compile(r"^os\.(getenv|putenv|environ\.get)$")),
+    ("time", re.compile(r"^(time\.(time|sleep|monotonic|time_ns)|datetime\.(now|utcnow|datetime\.now))$|\.sleep$")),
+    ("random", re.compile(r"^(random|uuid|secrets)\.")),
+    ("console", re.compile(r"^(print|input)$|^logging\.")),
+    ("thread", re.compile(r"^(threading|asyncio|multiprocessing|concurrent)\.|^ThreadPoolExecutor$")),
+]
+
+
+def classify_call(call_name: str) -> list:
+    name = call_name.split("(")[0].strip()
+    return [effect for effect, rx in EFFECT_RULES if rx.search(name)]
+
+
+def propagate(module: ModuleIR) -> None:
+    funcs = [s for s in module.symbols if s.kind == "function"]
+    by_tail: dict[str, list] = {}
+    for s in funcs:
+        by_tail.setdefault(s.name.split(".")[-1], []).append(s)
+    for s in funcs:
+        if not s.effects:
+            s.effects = {e: [] for c in s.calls for e in classify_call(c)}
+        if not s.raises_all:
+            s.raises_all = {r: [] for r in s.raises}
+        unknown = 0
+        for c in s.calls:
+            tail = c.split("(")[0].split(".")[-1]
+            if not classify_call(c) and tail not in by_tail:
+                unknown += 1
+        s.unknown_calls = unknown
+    changed, rounds = True, 0
+    while changed and rounds < 32:
+        changed, rounds = False, rounds + 1
+        for s in funcs:
+            for c in s.calls:
+                tail = c.split("(")[0].split(".")[-1]
+                cands = by_tail.get(tail, [])
+                if len(cands) != 1 or cands[0] is s:
+                    continue
+                callee = cands[0]
+                for eff in callee.effects:
+                    if eff not in s.effects:
+                        s.effects[eff] = [tail]
+                        changed = True
+                    elif s.effects[eff] and tail not in s.effects[eff]:
+                        s.effects[eff] = sorted(s.effects[eff] + [tail])
+                for exc in callee.raises_all:
+                    if exc not in s.raises_all:
+                        s.raises_all[exc] = [tail]
+                        changed = True
+                    elif s.raises_all[exc] and tail not in s.raises_all[exc]:
+                        s.raises_all[exc] = sorted(s.raises_all[exc] + [tail])
+
 
 def expr_risk(node: ast.AST | None) -> str:
     if node is None:
