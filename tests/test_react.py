@@ -264,6 +264,40 @@ class TestRenderTree(unittest.TestCase):
         self.assertIn("A", tags)
         self.assertIn("B", tags)
 
+    def test_guard_clause_last_return_wins(self):
+        src = ("function Card({ loading }) {\n"
+               "  if (loading) { return <Spinner />; }\n"
+               "  return <Content />;\n}\n")
+        tags = [t for _, t, _ in self.flat(self.render(src))]
+        self.assertEqual(tags, ["Content"])
+
+    def test_two_guards_last_return_wins(self):
+        src = ("function T({ a, b }) {\n"
+               "  if (a) return <A />;\n"
+               "  if (b) return <B />;\n"
+               "  return <C />;\n}\n")
+        tags = [t for _, t, _ in self.flat(self.render(src))]
+        self.assertEqual(tags, ["C"])
+
+    def test_exact_budget_no_false_truncation(self):
+        # 1 (outer div) + 199 self-closing <i/> children == RENDER_BUDGET (200)
+        # exactly, with nothing dropped -- must NOT be flagged as truncated.
+        children = "<i/>" * 199
+        src = f"function T() {{\n  return <div>{children}</div>;\n}}\n"
+        risks = [r for _, _, r in self.flat(self.render(src))]
+        self.assertNotIn("render-truncated", risks)
+
+    def test_overflow_truncation_faulted(self):
+        children = "".join(f"<i>{{x{i}}}</i>" for i in range(120))
+        src = f"function T() {{\n  return <div>{children}</div>;\n}}\n"
+        risks = [r for _, _, r in self.flat(self.render(src))]
+        self.assertIn("render-truncated", risks)
+
+    def test_dynamic_component_with_spread_keeps_both_faults(self):
+        src = "function T({ p }) {\n  return <Menu.Item {...p} />;\n}\n"
+        risks = [r for _, _, r in self.flat(self.render(src))]
+        self.assertIn("dynamic-component+spread-props", risks)
+
 
 if __name__ == "__main__":
     unittest.main()

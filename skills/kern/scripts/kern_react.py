@@ -237,6 +237,7 @@ def _jsx_attrs(el, ntext):
 def _lower_jsx(node, ntext, counter, events_out, element_name=""):
     """Lower one JSX node (or jsx child) to list[RenderNode]."""
     if counter["n"] >= RENDER_BUDGET:
+        counter["dropped"] = True
         return []
     n = _unwrap_parens(node)
     if n is None:
@@ -244,15 +245,20 @@ def _lower_jsx(node, ntext, counter, events_out, element_name=""):
     out = []
 
     def make(tag, **kw):
+        if counter["n"] >= RENDER_BUDGET:
+            counter["dropped"] = True
+            return None
         counter["n"] += 1
         return RenderNode(tag=tag, line=n.start_point[0] + 1, **kw)
 
     if n.type in ("jsx_element", "jsx_self_closing_element"):
         name, is_comp, risk = _jsx_name(n, ntext)
         attrs, spread_only, ev = _jsx_attrs(n, ntext)
-        if spread_only and not risk:
-            risk = "spread-props"
+        if spread_only:
+            risk = f"{risk}+spread-props" if risk else "spread-props"
         rn = make(name, attrs=attrs, is_component=is_comp, risk=risk)
+        if rn is None:
+            return []
         for aname, value in ev:
             events_out.append((name, aname, value))
         if n.type == "jsx_element":
@@ -265,7 +271,9 @@ def _lower_jsx(node, ntext, counter, events_out, element_name=""):
     elif n.type == "jsx_text":
         txt = ntext(n, 60)
         if txt:
-            out.append(make(txt))
+            rn = make(txt)
+            if rn is not None:
+                out.append(rn)
     elif n.type == "jsx_expression":
         inner = n.named_children[0] if n.named_children else None
         out.extend(_lower_expr(inner, ntext, counter, events_out, element_name))
@@ -277,10 +285,16 @@ def _lower_jsx(node, ntext, counter, events_out, element_name=""):
 
 def _lower_expr(n, ntext, counter, events_out, element_name):
     n = _unwrap_parens(n)
-    if n is None or counter["n"] >= RENDER_BUDGET:
+    if n is None:
+        return []
+    if counter["n"] >= RENDER_BUDGET:
+        counter["dropped"] = True
         return []
 
     def make(tag, **kw):
+        if counter["n"] >= RENDER_BUDGET:
+            counter["dropped"] = True
+            return None
         counter["n"] += 1
         return RenderNode(tag=tag, line=n.start_point[0] + 1, **kw)
 
@@ -292,6 +306,8 @@ def _lower_expr(n, ntext, counter, events_out, element_name):
         if op is not None and op.type == "&&" and right is not None and right.type in JSX_TYPES:
             left = n.child_by_field_name("left")
             rn = make(f"IF {ntext(left, 80)}", is_structure=True)
+            if rn is None:
+                return []
             rn.children = _lower_jsx(right, ntext, counter, events_out, element_name)
             return [rn]
     elif n.type == "ternary_expression":
@@ -301,12 +317,14 @@ def _lower_expr(n, ntext, counter, events_out, element_name):
         branches = []
         if cons is not None and cons.type in JSX_TYPES:
             rn = make(f"IF {ntext(cond, 80)}", is_structure=True)
-            rn.children = _lower_jsx(cons, ntext, counter, events_out, element_name)
-            branches.append(rn)
+            if rn is not None:
+                rn.children = _lower_jsx(cons, ntext, counter, events_out, element_name)
+                branches.append(rn)
         if alt is not None and alt.type in JSX_TYPES:
             el = make("ELSE", is_structure=True)
-            el.children = _lower_jsx(alt, ntext, counter, events_out, element_name)
-            branches.append(el)
+            if el is not None:
+                el.children = _lower_jsx(alt, ntext, counter, events_out, element_name)
+                branches.append(el)
         if branches:
             return branches
     elif n.type == "call_expression":
@@ -328,39 +346,47 @@ def _lower_expr(n, ntext, counter, events_out, element_name):
                     else:
                         param_txt = "_"
                     rn = make(f"FOR {param_txt} in {ntext(receiver, 60)}", is_structure=True)
+                    if rn is None:
+                        return []
                     body = cb.child_by_field_name("body")
                     rn.children = _lower_jsx(body, ntext, counter, events_out, element_name) if body is not None else []
                     return [rn]
     elif n.type in ("arrow_function", "function_expression"):
-        return [make("{" + ntext(n, 60) + "}", risk="render-prop")]
-    return [make("{" + ntext(n, 80) + "}")]
+        rn = make("{" + ntext(n, 60) + "}", risk="render-prop")
+        return [rn] if rn is not None else []
+    rn = make("{" + ntext(n, 80) + "}")
+    return [rn] if rn is not None else []
 
 
 def _extract_render(node, react, ntext, events_out):
     body = node.child_by_field_name("body")
     if body is None:
         return
-    counter = {"n": 0}
+    counter = {"n": 0, "dropped": False}
     jsx_root = None
     if body.type != "statement_block":
         jsx_root = _unwrap_parens(body)
+        if jsx_root is not None and jsx_root.type not in JSX_TYPES:
+            jsx_root = None
     else:
+        best_line = -1
         stack = list(body.named_children)
         while stack:
-            s = stack.pop(0)
+            s = stack.pop()
             if s.type in FN_TYPES:
                 continue
             if s.type == "return_statement":
                 for ch in s.named_children:
                     u = _unwrap_parens(ch)
-                    if u is not None and u.type in JSX_TYPES:
-                        jsx_root = u   # last JSX return wins
+                    if u is not None and u.type in JSX_TYPES and s.start_point[0] > best_line:
+                        best_line = s.start_point[0]
+                        jsx_root = u   # textually last JSX-bearing return wins
             else:
                 stack.extend(s.named_children)
     if jsx_root is None:
         return
     react["render"] = _lower_jsx(jsx_root, ntext, counter, events_out)
-    if counter["n"] >= RENDER_BUDGET:
+    if counter.get("dropped"):
         react["render"].append(RenderNode(tag="…", risk="render-truncated",
                                           line=jsx_root.start_point[0] + 1))
 
