@@ -779,7 +779,8 @@ def fault_source(source: Path, relative: str, start: int | None, end: int | None
 def verify_symbol(root: Path, paths: dict[str, Path], relative: str, source: Path,
                   symbol: str, expected_hash: str, expected_span: str | None = None) -> dict[str, Any]:
     import kern_compile
-    text = source.read_text(encoding="utf-8", errors="replace")
+    data = source.read_bytes()
+    text = data.decode("utf-8", "replace")
     suffix = source.suffix.lower()
     if suffix == ".py":
         module = kern_compile.parse_python(text)
@@ -790,18 +791,32 @@ def verify_symbol(root: Path, paths: dict[str, Path], relative: str, source: Pat
     if module.parse_error:
         raise RuntimeError(f"current source does not parse ({module.parse_error}); fault exact source")
     base = {"ok": True, "operation": "verify", "source_rel": relative, "symbol": symbol,
-            "source_sha256": sha256_bytes(text.encode("utf-8", "surrogatepass"))}
+            "source_sha256": sha256_bytes(data)}
     matches = [s for s in module.symbols if s.kind in {"function", "class"} and s.name == symbol]
     if not matches:
         return {**base, "result": "stale", "reason": "symbol-not-found"}
-    found = matches[0]
-    current_span = f"L{found.span[0]}-{found.span[1]}"
-    if found.slice8 != expected_hash:
-        return {**base, "result": "stale", "reason": "symbol-bytes-changed",
-                "current_hash": found.slice8, "current_span": current_span}
-    if expected_span and expected_span != current_span:
+
+    def span_of(sym) -> str:
+        return f"L{sym.span[0]}-{sym.span[1]}"
+
+    hash_hit = next((m for m in matches if m.slice8 == expected_hash), None)
+    if hash_hit is not None:
+        current_span = span_of(hash_hit)
+        if expected_span is None or expected_span == current_span:
+            return {**base, "result": "ok", "current_span": current_span}
         return {**base, "result": "moved", "current_span": current_span}
-    return {**base, "result": "ok", "current_span": current_span}
+
+    span_hit = None
+    if expected_span:
+        span_hit = next((m for m in matches if span_of(m) == expected_span), None)
+    if span_hit is not None:
+        return {**base, "result": "stale", "reason": "symbol-bytes-changed",
+                "current_hash": span_hit.slice8, "current_span": span_of(span_hit)}
+
+    found = matches[0]
+    return {**base, "result": "stale", "reason": "symbol-bytes-changed",
+            "current_hash": found.slice8, "current_span": span_of(found),
+            "candidates": [{"span": span_of(m), "hash": m.slice8} for m in matches]}
 
 
 def parse_args() -> argparse.Namespace:

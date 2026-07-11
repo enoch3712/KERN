@@ -62,6 +62,50 @@ class TestVerify(unittest.TestCase):
         with self.assertRaises(ValueError):
             kern_cache.verify_symbol(self.root, self.paths, rel, src, "x", "deadbeef", None)
 
+    def test_duplicate_names_hash_selects_correct_candidate(self):
+        import kern_compile
+        src = (
+            "class Widget:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return self._x\n"
+            "    @x.setter\n"
+            "    def x(self, value):\n"
+            "        self._x = value\n"
+        )
+        self.file.write_text(src)
+        mod = kern_compile.parse_python(src)
+        setter = [s for s in mod.symbols if s.name == "Widget.x"][1]
+        rel, srcp = kern_cache.normalize_rel(self.root, "mod.py")
+        r = kern_cache.verify_symbol(self.root, self.paths, rel, srcp, "Widget.x",
+                                     setter.slice8, f"L{setter.span[0]}-{setter.span[1]}")
+        self.assertEqual(r["result"], "ok")
+        self.assertEqual(r["current_span"], f"L{setter.span[0]}-{setter.span[1]}")
+
+    def test_duplicate_names_stale_lists_candidates(self):
+        src = (
+            "class Widget:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return self._x\n"
+            "    @x.setter\n"
+            "    def x(self, value):\n"
+            "        self._x = value\n"
+        )
+        self.file.write_text(src)
+        rel, srcp = kern_cache.normalize_rel(self.root, "mod.py")
+        r = kern_cache.verify_symbol(self.root, self.paths, rel, srcp, "Widget.x",
+                                     "00000000", None)
+        self.assertEqual(r["result"], "stale")
+        self.assertEqual(len(r["candidates"]), 2)
+
+    def test_source_sha256_matches_raw_bytes(self):
+        data = self.file.read_bytes()
+        rel, srcp = kern_cache.normalize_rel(self.root, "mod.py")
+        r = kern_cache.verify_symbol(self.root, self.paths, rel, srcp,
+                                     "load_entry", "00000000", None)
+        self.assertEqual(r["source_sha256"], kern_cache.sha256_bytes(data))
+
 
 if __name__ == "__main__":
     unittest.main()
