@@ -344,5 +344,49 @@ class TestEvents(unittest.TestCase):
         self.assertEqual(ev[0].action, "set open=true")
 
 
+@unittest.skipUnless(kern_compile.tsjs_available(), "tree-sitter not installed")
+class TestEmit(unittest.TestCase):
+    def il(self, tier, src=None):
+        mod = kern_compile.parse_tsjs(src or TSX_SAMPLE, dialect="tsx")
+        return kern_compile.emit_il(mod, "app/UserCard.tsx", "a" * 64, "none", tier)
+
+    def test_l1_head_only(self):
+        il = self.il("L1")
+        self.assertIn("COMPONENT UserCard({ user, onClose = noop }) @L", il)
+        self.assertNotIn("STATE", il)
+        self.assertNotIn("RENDER", il)
+
+    def test_l2_heads_and_collapsed_render(self):
+        il = self.il("L2")
+        self.assertIn("  PROPS user, onClose=noop", il)
+        self.assertIn("  STATE open=false", il)
+        self.assertIn("  EFFECT deps=[user.id]", il)
+        self.assertIn("  EVENT Card.onClick -> set open=true", il)
+        self.assertIn("  RENDER", il)
+        self.assertIn("Card", il)
+        self.assertIn("IF open > UserDetails", il)   # single kept child inlined
+        self.assertNotIn("span", il)                  # host element collapsed at L2
+        self.assertNotIn("src={user.avatar}", il)     # attrs dropped at L2
+
+    def test_l3_full_render_and_effect_body(self):
+        il = self.il("L3")
+        self.assertIn("span", il)
+        self.assertIn("src={user.avatar}", il)
+        self.assertIn("CALL analytics.track", il)     # effect body flow
+
+    def test_frontend_header_tag(self):
+        self.assertIn("frontend=tree-sitter+react", self.il("L2"))
+
+    def test_fault_footer(self):
+        src = "function T() {\n  return <Foo.Bar />;\n}\n"
+        il = self.il("L2", src)
+        self.assertIn("!FAULT(dynamic-component)", il)
+        self.assertIn("dynamic-component(L", il)      # FAULT-BEFORE footer
+
+    def test_plain_function_in_same_file_unchanged(self):
+        il = self.il("L2")
+        self.assertIn("F formatName(name: string) -> string", il)
+
+
 if __name__ == "__main__":
     unittest.main()

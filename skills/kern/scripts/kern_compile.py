@@ -202,7 +202,7 @@ def classify_call(call_name: str) -> list:
 
 
 def propagate(module: ModuleIR) -> None:
-    funcs = [s for s in module.symbols if s.kind == "function"]
+    funcs = [s for s in module.symbols if s.kind in ("function", "component")]
     by_tail: dict[str, list] = {}
     for s in funcs:
         by_tail.setdefault(s.name.split(".")[-1], []).append(s)
@@ -761,6 +761,10 @@ def emit_il(module: ModuleIR, source_rel: str, source_sha256: str,
         elif s.kind == "function":
             out.append("")
             out.extend(_function_lines(s, level, tier, faults))
+        elif s.kind == "component":
+            import kern_react
+            out.append("")
+            out.extend(kern_react.component_lines(s, level, tier, faults))
     omit = " ".join(f"{k}={v}" for k, v in sorted(module.omit.items()))
     out.extend([
         "",

@@ -430,6 +430,73 @@ def _extract_render(node, react, ntext, events_out):
                                           line=jsx_root.start_point[0] + 1))
 
 
+def _render_lines(nodes, level, depth, faults, lines):
+    for n in nodes:
+        keep = level >= 3 or n.is_component or n.is_structure
+        if not keep:
+            _render_lines(n.children, level, depth, faults, lines)
+            continue
+        piece = n.tag
+        if level >= 3 and n.attrs:
+            piece += f" {n.attrs}"
+        if n.risk:
+            piece += f" !FAULT({n.risk})"
+            faults.append(f"{n.risk}(L{n.line})")
+        kept_children = _kept(n.children, level)
+        if level == 2 and n.is_structure and len(kept_children) == 1 and not kept_children[0].children:
+            child = kept_children[0]
+            piece += f" > {child.tag}"
+            if child.risk:
+                piece += f" !FAULT({child.risk})"
+                faults.append(f"{child.risk}(L{child.line})")
+            lines.append("  " * depth + piece)
+            continue
+        lines.append("  " * depth + piece)
+        _render_lines(n.children, level, depth + 1, faults, lines)
+
+
+def _kept(nodes, level):
+    out = []
+    for n in nodes:
+        if level >= 3 or n.is_component or n.is_structure:
+            out.append(n)
+        else:
+            out.extend(_kept(n.children, level))
+    return out
+
+
+def component_lines(s, level, tier, faults):
+    lines = [f"COMPONENT {s.name}({s.signature}) @L{s.span[0]}-{s.span[1]} ^{s.slice8} ~{tier}"]
+    if level == 1:
+        return lines
+    r = s.react
+    if r.get("wrapper"):
+        lines.append(f"  WRAP {r['wrapper']}")
+    if r.get("props"):
+        lines.append("  PROPS " + ", ".join(r["props"]))
+    for h in r.get("hooks", []):
+        tag = ""
+        if h.risk:
+            tag = f" !FAULT({h.risk})"
+            faults.append(f"{h.risk}(L{h.line})")
+        lines.append(f"  {h.kind} {h.detail}{tag}")
+        if h.kind == "EFFECT" and level >= 3:
+            for op in h.flow:
+                piece = op.op + (f" {op.detail}" if op.detail else "")
+                if op.binds:
+                    piece += f" -> {op.binds}"
+                lines.append("  " * (op.depth + 2) + piece)
+    for e in r.get("events", []):
+        lines.append(f"  EVENT {e.target} -> {e.action}")
+    for risk, line in r.get("faults", []):
+        lines.append(f"  !FAULT({risk}) @L{line}")
+        faults.append(f"{risk}(L{line})")
+    if r.get("render"):
+        lines.append("  RENDER")
+        _render_lines(r["render"], level, 2, faults, lines)
+    return lines
+
+
 def lower_components(fn_nodes, ntext, flow_fn) -> bool:
     upgraded = False
     for sym, node in fn_nodes:

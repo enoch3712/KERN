@@ -845,7 +845,7 @@ def verify_symbol(root: Path, paths: dict[str, Path], relative: str, source: Pat
         raise RuntimeError(f"current source does not parse ({module.parse_error}); fault exact source")
     base = {"ok": True, "operation": "verify", "source_rel": relative, "symbol": symbol,
             "source_sha256": sha256_bytes(data)}
-    matches = [s for s in module.symbols if s.kind in {"function", "class"} and s.name == symbol]
+    matches = [s for s in module.symbols if s.kind in {"function", "class", "component"} and s.name == symbol]
     if not matches:
         return {**base, "result": "stale", "reason": "symbol-not-found"}
 
